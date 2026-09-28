@@ -55,6 +55,7 @@ public enum QQMusicMatcher {
         let titleScore = similarity(normalize(title), normalize(candidate.name))
         let a = normalize(artist)
         let b = normalize(candidate.artist)
+
         let artistScore: Double
         if a.isEmpty || b.isEmpty {
             artistScore = 0.5
@@ -98,6 +99,7 @@ public enum QQMusicMatcher {
 
     public static func similarity(_ a: String, _ b: String) -> Double {
         if a == b { return 1 }
+
         let lhs = Array(a.utf16)
         let rhs = Array(b.utf16)
         if lhs.isEmpty || rhs.isEmpty { return 0 }
@@ -109,11 +111,10 @@ public enum QQMusicMatcher {
             current[0] = i
             for j in 1...rhs.count {
                 let cost = lhs[i - 1] == rhs[j - 1] ? 0 : 1
-                current[j] = min(
-                    previous[j] + 1,
-                    current[j - 1] + 1,
-                    previous[j - 1] + cost
-                )
+                let insert = current[j - 1] + 1
+                let delete = previous[j] + 1
+                let replace = previous[j - 1] + cost
+                current[j] = min(insert, min(delete, replace))
             }
             swap(&previous, &current)
         }
