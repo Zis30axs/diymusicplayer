@@ -47,8 +47,7 @@ public enum LyricCredits {
     }
 
     private static func splitRole(_ text: String) -> (String, String)? {
-        let separators = [":", "："]
-        for separator in separators {
+        for separator in [":", "："] {
             guard let range = text.range(of: separator) else { continue }
             let role = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             let name = String(text[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -62,8 +61,8 @@ public enum LyricCredits {
         let key = normalizeRole(role)
         if lyricist.contains(key) || composer.contains(key) || other.contains(key) { return true }
         guard key.utf16.count <= 6, !key.isEmpty else { return false }
-        return key.unicodeScalars.allSatisfy {
-            CharacterSet(charactersIn: "\u{4E00}"..."\u{9FFF}").contains($0)
+        return key.unicodeScalars.allSatisfy { scalar in
+            (0x4E00...0x9FFF).contains(scalar.value)
         }
     }
 
