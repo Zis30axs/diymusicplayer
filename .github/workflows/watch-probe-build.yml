@@ -1,0 +1,31 @@
+name: Watch probe build
+
+on:
+  pull_request:
+    paths:
+      - "WatchProbe/**"
+      - ".github/workflows/watch-probe-build.yml"
+  push:
+    branches:
+      - watch/m0-probe
+    paths:
+      - "WatchProbe/**"
+      - ".github/workflows/watch-probe-build.yml"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: WatchProbe
+        run: xcodegen generate
+
+      - name: Build watchOS simulator app
+        working-directory: WatchProbe
+        run: |
+          xcodebuild             -project WatchProbe.xcodeproj             -scheme WatchProbe             -configuration Debug             -sdk watchsimulator             CODE_SIGNING_ALLOWED=NO             build
