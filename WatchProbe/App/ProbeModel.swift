@@ -1,6 +1,7 @@
 import AVFoundation
 import Combine
 import Foundation
+import Network
 
 @MainActor
 final class ProbeModel: ObservableObject {
@@ -8,12 +9,28 @@ final class ProbeModel: ObservableObject {
         "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8"
 
     @Published var urlString = appleHLSExample
+    @Published private(set) var pathStatus = "Path unknown"
     @Published private(set) var networkStatus = "Not tested"
     @Published private(set) var playbackStatus = "Stopped"
     @Published private(set) var isTestingNetwork = false
     @Published private(set) var isStartingPlayback = false
 
     private var player: AVPlayer?
+    private let pathMonitor = NWPathMonitor()
+    private let pathQueue = DispatchQueue(label: "DIYMusicPlayer.WatchProbe.Path")
+
+    init() {
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                self?.pathStatus = Self.describe(path)
+            }
+        }
+        pathMonitor.start(queue: pathQueue)
+    }
+
+    deinit {
+        pathMonitor.cancel()
+    }
 
     var parsedURL: URL? {
         guard let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)),
@@ -122,6 +139,21 @@ final class ProbeModel: ObservableObject {
         player = nil
         playbackStatus = "Stopped"
         try? AVAudioSession.sharedInstance().setActive(false)
+    }
+
+    private static func describe(_ path: NWPath) -> String {
+        guard path.status == .satisfied else {
+            return "No network"
+        }
+
+        var transports: [String] = []
+        if path.usesInterfaceType(.cellular) { transports.append("Cellular") }
+        if path.usesInterfaceType(.wifi) { transports.append("Wi-Fi") }
+        if path.usesInterfaceType(.wiredEthernet) { transports.append("Ethernet") }
+        if path.usesInterfaceType(.other) { transports.append("Other") }
+
+        let route = transports.isEmpty ? "Connected" : transports.joined(separator: " + ")
+        return path.isExpensive ? route + " · expensive" : route
     }
 
     private static func short(_ error: Error) -> String {
