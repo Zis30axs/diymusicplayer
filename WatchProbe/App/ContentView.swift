@@ -9,6 +9,10 @@ struct ContentView: View {
                 Text("M0 Watch Probe")
                     .font(.headline)
 
+                Text(model.pathStatus)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 TextField("HTTPS stream URL", text: $model.urlString)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
@@ -62,7 +66,7 @@ struct ContentView: View {
                     .font(.footnote)
                     .multilineTextAlignment(.center)
 
-                Text("For the cellular gate: disable iPhone Bluetooth and Watch Wi-Fi, keep cellular on, then repeat Test HTTPS + Play.")
+                Text("For the cellular gate, make sure the route label says Cellular before repeating Test HTTPS + Play.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
