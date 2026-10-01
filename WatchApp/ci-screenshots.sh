@@ -54,6 +54,9 @@ shot lyrics-intro -sigma-demo -sigma-screen lyrics -sigma-position 3000
 shot lyrics-cjk  -sigma-demo -sigma-screen lyrics -sigma-position 12500
 shot lyrics-word -sigma-demo -sigma-screen lyrics -sigma-position 17000
 shot search      -sigma-demo -sigma-screen search
+shot account      -sigma-demo -sigma-screen account
+shot account-scanned -sigma-demo -sigma-screen account-scanned
+shot account-in   -sigma-demo -sigma-screen account-in
 shot chart       -sigma-screen chart
 xcrun simctl shutdown "$UDID" > /dev/null 2>&1 || true
 ls -la "$OUT"

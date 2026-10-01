@@ -21,8 +21,22 @@ struct HomeView: View {
                 NavigationLink(value: Route.chart) {
                     Label("热歌榜", systemImage: "flame")
                 }
+                if app.account.state.phase == .signedIn {
+                    NavigationLink(value: Route.daily) {
+                        Label("每日推荐", systemImage: "calendar")
+                    }
+                    NavigationLink(value: Route.playlists) {
+                        Label("我的歌单", systemImage: "music.note.list")
+                    }
+                }
                 NavigationLink(value: Route.search) {
                     Label("搜索", systemImage: "magnifyingglass")
+                }
+                NavigationLink(value: Route.account) {
+                    Label(
+                        app.account.state.phase == .signedIn ? (app.account.profile?.nickname ?? "账号") : "登录网易云",
+                        systemImage: "person.crop.circle"
+                    )
                 }
             }
             .navigationTitle("Sigma")
@@ -34,6 +48,14 @@ struct HomeView: View {
                     SearchView()
                 case .player:
                     NowPlayingView()
+                case .daily:
+                    TrackListView(title: "每日推荐") { try await app.library.daily() }
+                case .playlists:
+                    PlaylistsView()
+                case .playlist(let id, let name):
+                    TrackListView(title: name) { try await app.library.playlist(id: id, name: name, limit: 100) }
+                case .account:
+                    AccountView()
                 }
             }
         }

@@ -103,6 +103,12 @@ public final class NeteaseAccount {
         }
     }
 
+    /// Shows `state` and `profile` without any login behind them (previews and screenshots).
+    public func preview(_ state: State, profile: Profile? = nil) {
+        self.state = state
+        self.profile = profile
+    }
+
     // MARK: QR login
 
     /// Shows a new code: fetches a key, then polls it every two seconds. Stops any attempt before it.
