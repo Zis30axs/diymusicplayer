@@ -13,7 +13,7 @@ The implementation follows the M0-M7 porting plan. The first code milestone is t
 - [x] Repository initialized
 - [x] M0 device audio/network probe (see WatchProbe/README.md for results)
 - [x] M1 lyric core + parity tests
-- [x] M2 crypto and service APIs (NetEase weapi/eapi, QQ QRC decrypt, `sigma-cli`; stream URLs still to be confirmed from a mainland network, see below)
+- [x] M2 crypto and service APIs (NetEase weapi/eapi, QQ QRC decrypt, `sigma-cli`; stream URLs confirmed from a mainland network)
 - [x] M3 lyric service + queue (`LyricsService` lookup/cache, `MusicPlayer`, `MusicLibrary`)
 - [x] M4 watch playback (`PlayerEngine` on AVPlayer, headphone background audio, Now Playing / remote commands, minimal `WatchApp`; on-watch check still to do, see WatchApp/README.md)
 - [ ] M5 watch UI
@@ -29,9 +29,10 @@ swift run sigma-cli search "海阔天空"
 swift run sigma-cli mix "Beyond 海阔天空" --show   # NetEase track + QQ word-timed lyrics
 ```
 
-`smoke` prints counts and timings only, never lyric text. Run from a US network (the `Live smoke` GitHub
-workflow) NetEase search, playlists, lyrics and QQ QRC decryption all pass, but NetEase answers every stream
-URL request with item code 404 (region restriction); run `smoke` from a mainland network to confirm streaming.
+`smoke` prints counts and timings only, never lyric text. From a mainland network everything passes, including
+NetEase stream URLs (a signed-out account gets a 30 s preview of VIP songs: `preview=true`). From a US network
+(the `Live smoke` GitHub workflow) NetEase answers every stream URL request with item code 404 (region
+restriction), so streaming can only be verified from China.
 
 ## Source provenance
 
