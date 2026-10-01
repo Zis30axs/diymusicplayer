@@ -17,12 +17,22 @@ final class AppModel {
     @ObservationIgnored let engine: PlayerEngine?
     @ObservationIgnored let library: MusicLibrary
     @ObservationIgnored private var nowPlaying: NowPlayingBridge?
-    @ObservationIgnored private var nowPlayingTask: Task<Void, Never>?
+    @ObservationIgnored private var monitorTask: Task<Void, Never>?
+    @ObservationIgnored private var lyricsKey: LyricsKey?
+    @ObservationIgnored private var lyricsTask: Task<Void, Never>?
+
+    private struct LyricsKey: Equatable {
+        var trackId: String?
+        var epoch: Int
+    }
 
     var path: [Route] = []
 
-    /// Bumped when the lyric lookup is reconfigured, so the lyrics page asks again.
+    /// Bumped when the lyric lookup is reconfigured, so the lyrics are asked for again.
     private(set) var lyricsEpoch = 0
+
+    /// The current track's lyrics as far as they are known; `nil` until the lookup has answered once.
+    private(set) var lyrics: LyricsService.Snapshot?
 
     /// Added to the playback position before lyrics are matched: positive shows lyrics earlier. Bluetooth
     /// headphones delay the sound, so this is where a measured offset goes (M7).
@@ -45,6 +55,7 @@ final class AppModel {
                 self?.lyricsEpoch += 1
             }
             openLaunchScreen()
+            startMonitoring()
             return
         }
 
@@ -61,10 +72,36 @@ final class AppModel {
         let bridge = NowPlayingBridge(player: player)
         bridge.install()
         nowPlaying = bridge
-        nowPlayingTask = Task { [weak self] in
+        startMonitoring()
+    }
+
+    /// Four times a second: notice a track change (and look its lyrics up); once a second: tell the system
+    /// what is playing. Kept here rather than in a view so it never restarts with the screen.
+    private func startMonitoring() {
+        monitorTask = Task { [weak self] in
+            var tick = 0
             while !Task.isCancelled {
-                self?.nowPlaying?.refresh()
-                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                self.syncLyrics()
+                tick += 1
+                if tick % 4 == 0 { self.nowPlaying?.refresh() }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        }
+    }
+
+    private func syncLyrics() {
+        let key = LyricsKey(trackId: player.current?.id, epoch: lyricsEpoch)
+        guard key != lyricsKey else { return }
+        lyricsKey = key
+        lyricsTask?.cancel()
+        lyrics = nil
+        let track = player.current
+        let service = library.lyrics
+        lyricsTask = Task { [weak self] in
+            for await next in await service.updates(for: track) {
+                if Task.isCancelled { return }
+                self?.lyrics = next
             }
         }
     }
