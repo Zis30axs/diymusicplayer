@@ -19,14 +19,7 @@ struct LyricsView: View {
             if let snapshot {
                 if snapshot.lyrics.hasLines {
                     VStack(spacing: 4) {
-                        // Always-on display: one update a second and no sweeps.
-                        TimelineView(.animation(minimumInterval: dimmed ? 1 : 1.0 / 15, paused: !dimmed && !player.isPlaying)) { _ in
-                            LyricLines(
-                                lyrics: snapshot.lyrics,
-                                position: player.positionMs + app.lyricLeadMs,
-                                sweeping: !dimmed
-                            )
-                        }
+                        lines(snapshot, player: player)
                         Text(Self.sourceLabel(snapshot))
                             .font(.system(size: 9))
                             .foregroundStyle(.secondary)
@@ -39,10 +32,32 @@ struct LyricsView: View {
             }
         }
         .padding(.horizontal, 4)
+        .overlay(alignment: .topLeading) {
+            if Demo.isOn && CommandLine.arguments.contains("-sigma-debug") {
+                Text("snap=\(snapshot == nil ? "nil" : "ok") lines=\(snapshot?.lyrics.lines.count ?? -1) why=\(snapshot.map { "\($0.why)" } ?? "-") pos=\(player.positionMs)")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.yellow)
+            }
+        }
         .task(id: Key(trackId: player.current?.id, epoch: app.lyricsEpoch)) {
             snapshot = nil
             for await next in await app.library.lyrics.updates(for: player.current) {
                 snapshot = next
+            }
+        }
+    }
+
+    /// Redrawn 15 times a second while playing for the word sweep, twice a second otherwise (a seek while
+    /// paused still shows), once a second on the always-on display.
+    @ViewBuilder
+    private func lines(_ snapshot: LyricsService.Snapshot, player: MusicPlayer) -> some View {
+        if player.isPlaying && !dimmed {
+            TimelineView(.animation(minimumInterval: 1.0 / 15)) { _ in
+                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs + app.lyricLeadMs, sweeping: true)
+            }
+        } else {
+            TimelineView(.periodic(from: .now, by: dimmed ? 1 : 0.5)) { _ in
+                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs + app.lyricLeadMs, sweeping: !dimmed)
             }
         }
     }
