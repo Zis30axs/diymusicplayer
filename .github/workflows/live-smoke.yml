@@ -1,0 +1,37 @@
+name: Live smoke
+
+# Calls the real NetEase / QQ Music endpoints once through sigma-cli. Manual, or by pushing a
+# `smoke/**` branch; it prints counts and timings only, never lyric text.
+on:
+  push:
+    branches:
+      - "smoke/**"
+  workflow_dispatch:
+    inputs:
+      keyword:
+        description: Search keyword
+        default: "Beyond 海阔天空"
+
+jobs:
+  smoke:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sigma-cli
+        run: swift build --product sigma-cli
+      - name: Run smoke test
+        env:
+          KEYWORD: ${{ inputs.keyword }}
+        run: |
+          set +e
+          .build/debug/sigma-cli smoke ${KEYWORD:+"$KEYWORD"} > smoke.log 2>&1
+          status=$?
+          cat smoke.log
+          exit $status
+      # Annotations are readable through the API; the raw log needs a browser login.
+      - name: Summarize results
+        if: always()
+        run: |
+          msg=$(sed 's/%/%25/g' smoke.log 2>/dev/null | awk 'BEGIN{ORS="%0A"}1')
+          echo "::notice title=live smoke::${msg}"
