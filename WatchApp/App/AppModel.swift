@@ -165,17 +165,17 @@ final class AppModel {
         library = MusicLibrary(netease: api)
         netease = api
         account = NeteaseAccount(session: session)
-        let store = DownloadStore.applicationSupport()
+        let saved = DownloadStore.applicationSupport()
         let transfer = URLSessionFileTransfer(identifier: Self.downloadSessionId)
         downloader = transfer
         downloads = DownloadCenter(
-            store: store,
+            store: saved,
             source: DownloadCenter.neteaseSource(api, quality: Self.storedAudioQuality),
             transfer: transfer
         )
         // A saved song plays from its file (no network needed); anything else is streamed.
         let engine = PlayerEngine(resolver: PlayerEngine.downloadsFirst(
-            store,
+            saved,
             fallback: PlayerEngine.neteaseResolver(api, quality: Self.storedAudioQuality)
         ))
         self.engine = engine
