@@ -38,7 +38,7 @@ fi
 if [ -z "$TEAM" ]; then
   for f in ../WatchProbe/project.yml ../WatchProbe/WatchProbe.xcodeproj/project.pbxproj; do
     [ -f "$f" ] || continue
-    TEAM=$(grep -E 'DEVELOPMENT_TEAM' "$f" | grep -Eo '[A-Z0-9]{10}' | head -1)
+    TEAM=$(sed -nE 's/.*DEVELOPMENT_TEAM[[:space:]]*[=:][[:space:]]*"?([A-Z0-9]{10}).*/\1/p' "$f" | head -1)
     [ -n "$TEAM" ] && break
   done
 fi
