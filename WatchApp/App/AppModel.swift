@@ -44,12 +44,7 @@ final class AppModel {
                 await lyrics.setOverride(Demo.lyrics)
                 self?.lyricsEpoch += 1
             }
-            switch Demo.screen {
-            case "chart": path = [.chart]
-            case "search": path = [.search]
-            case "player", "lyrics": path = [.player]
-            default: break
-            }
+            openLaunchScreen()
             return
         }
 
@@ -59,6 +54,7 @@ final class AppModel {
         let engine = PlayerEngine(resolver: PlayerEngine.neteaseResolver(api))
         self.engine = engine
         player = MusicPlayer(backend: engine, source: ListSource(name: "", tracks: []))
+        openLaunchScreen()
 
         player.setVolume(1)  // the headphones and the crown own the loudness on the watch
         player.startAutoUpdate(every: .milliseconds(500))
@@ -70,6 +66,16 @@ final class AppModel {
                 self?.nowPlaying?.refresh()
                 try? await Task.sleep(for: .seconds(1))
             }
+        }
+    }
+
+    /// `-sigma-screen <name>` on the command line opens that screen at launch (for screenshots).
+    private func openLaunchScreen() {
+        switch Demo.screen {
+        case "chart": path = [.chart]
+        case "search": path = [.search]
+        case "player", "lyrics": path = [.player]
+        default: break
         }
     }
 
