@@ -57,4 +57,24 @@ xcrun simctl launch booted com.zis30axs.diymusicplayer.watch -sigma-demo -sigma-
    normally 0. Tell me the number and it becomes the default.
 3. Turn Wi-Fi/cellular off and try the hot chart: the message says there is no network connection.
 
+## On-watch check (M8: covers, QQ word timing, network)
+
+1. Covers show in the lists, on the player page and (with headphones) on the Now Playing screen; the account page
+   shows your NetEase avatar.
+2. Lyrics page of a song that stays line-timed: the orange line at the bottom says why QQ Music did not word-time it
+   (nothing found / closest song and how alike / QQ has the song but no word timing / connection failed). Tap it to ask again.
+   If a song you know has word timing on the desktop client still stays line-timed, send that orange line.
+3. 设置 > 网络 > 测速 lists the time of one small request to NetEase, its audio servers, QQ Music and the image
+   servers; a red line names the service that failed. 设置 > 音质: 标准 128k starts sooner than 较高 320k.
+
+## On-watch check (M9: downloads)
+
+1. Player page, scroll down: 下载. Or swipe a song row left > 下载; the list's last row downloads all of them (it says
+   about how many MB first). The orange arrow on a row is a download under way, the grey filled one a saved song.
+2. 首页 > 已下载: saved songs with their sizes (tap to play, swipe to delete), downloads under way with a progress bar.
+3. Turn Wi-Fi and cellular off: a saved song still plays (it plays from its file); lyrics need the network.
+4. Songs that are only a 30 s preview (VIP songs while signed out, or without VIP) are refused with a message.
+5. Lower your wrist while a song downloads: the transfer continues in the system (a background session) and the song
+   is listed when you open the app again. If it is not, send what the 已下载 page shows.
+
 See REINSTALL.md for the 7-day reinstall routine of a free developer account.

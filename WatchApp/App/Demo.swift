@@ -27,6 +27,29 @@ enum Demo {
 
     static let avatar = picture("avatar", 0.35, 0.1)
 
+    /// A download folder with two saved songs, for the "已下载" page.
+    static func downloadStore() -> DownloadStore {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("sigma-demo-downloads", isDirectory: true)
+        let store = DownloadStore(directory: folder)
+        store.deleteAll()
+        var saved: [DownloadedTrack] = []
+        for (index, track) in tracks.prefix(2).enumerated() {
+            try? Data(count: 30_000).write(to: store.fileURL(for: track))
+            saved.append(DownloadedTrack(
+                track: track,
+                fileName: store.fileURL(for: track).lastPathComponent,
+                bytes: 4_200_000 + Int64(index) * 900_000,
+                savedAt: Date(timeIntervalSince1970: 1_000 - Double(index))
+            ))
+        }
+        store.saveItems(saved)
+        return store
+    }
+
+    static let downloadSource: DownloadSource = { track in
+        DownloadTarget(url: URL(string: "https://example.invalid/\(track.id).mp3")!)
+    }
+
     /// What the lyrics page says when QQ Music was asked for word timing and had nothing like this song.
     static let missedQQ = QQReport(.belowThreshold(best: "夜风 - 示例歌手", score: 0.41))
 
@@ -91,4 +114,16 @@ enum Demo {
             translation: translation
         )
     }
+}
+
+/// A transfer that stops 42% of the way, for a screenshot of a download under way.
+struct DemoTransfer: FileTransfer {
+    func download(_ url: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+        progress(0.42)
+        try await Task.sleep(for: .seconds(3600))
+    }
+
+    func activeDestinations() async -> Set<String> { [] }
+
+    func onUnattendedFinish(_ handler: @escaping @Sendable () -> Void) {}
 }

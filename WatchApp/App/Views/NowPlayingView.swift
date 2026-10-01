@@ -47,6 +47,8 @@ private struct ControlsPage: View {
                         Button { player.next() } label: { Image(systemName: "forward.fill") }
                     }
 
+                    DownloadButton(track: track)
+
                     if player.isBuffering {
                         Text("缓冲中…").font(.caption2).foregroundStyle(.secondary)
                     }
