@@ -30,6 +30,13 @@ Do these on the watch, on a mainland network (Wi-Fi or 4G), with headphones for 
 
 If a song fails, the red line under the buttons says why.
 
+## On-watch check (M6)
+
+1. Home > 登录网易云 > 扫码登录: a QR code appears (the same code was decoded from a simulator screenshot in CI).
+2. Scan it with the NetEase Cloud Music app on your phone and confirm: the page shows your name and VIP state, and 每日推荐 / 我的歌单 appear on the home list.
+3. A song that was a 30 s preview plays in full after logging in (VIP songs need a VIP account).
+4. Delete the app, reinstall it: you are still signed in (the login is kept in the Keychain).
+
 ## Looking at the UI without a watch
 
 `-sigma-demo` starts the app with made-up tracks and lyrics and no network; `-sigma-screen home|chart|search|player|lyrics`
