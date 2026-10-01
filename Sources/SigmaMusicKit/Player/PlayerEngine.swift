@@ -278,8 +278,7 @@ public final class PlayerEngine: MusicBackend {
     }
 
     private static func describe(_ error: any Error) -> String {
-        let text = (error as NSError).localizedDescription
-        return text.isEmpty ? String(describing: error) : text
+        userMessage(for: error)
     }
 
     // MARK: Interruptions and route changes

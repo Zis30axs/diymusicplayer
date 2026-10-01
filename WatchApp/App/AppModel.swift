@@ -11,6 +11,7 @@ enum Route: Hashable {
     case playlists
     case playlist(id: Int64, name: String)
     case account
+    case settings
 }
 
 /// Wires the SigmaMusicKit pieces together for the watch: one session on disk, one library, one engine.
@@ -39,12 +40,60 @@ final class AppModel {
     /// The current track's lyrics as far as they are known; `nil` until the lookup has answered once.
     private(set) var lyrics: LyricsService.Snapshot?
 
-    /// Added to the playback position before lyrics are matched: positive shows lyrics earlier. Bluetooth
-    /// headphones delay the sound, so this is where a measured offset goes (M7).
-    var lyricLeadMs: Int64 = 0
+    // MARK: Settings (kept in UserDefaults under the Java client's names)
+
+    var lyricChannel: LyricsService.Channel = .mix {
+        didSet { if oldValue != lyricChannel { changedLyricSetting("lyricChannel", lyricChannel.rawValue) } }
+    }
+    var lyricMode: LyricsService.Mode = .auto {
+        didSet { if oldValue != lyricMode { changedLyricSetting("lyricMode", lyricMode.rawValue) } }
+    }
+    var lyricLanguage: LyricsService.Language = .translation {
+        didSet { if oldValue != lyricLanguage { changedLyricSetting("lyricLanguage", lyricLanguage.rawValue) } }
+    }
+
+    /// Milliseconds the lyrics are held back. Bluetooth headphones play the sound a little after the player's
+    /// clock says it was sent, so with them the lyrics tend to run ahead; this is where a measured delay goes.
+    var lyricDelayMs = 0 {
+        didSet { Self.defaults.set(lyricDelayMs, forKey: "lyricDelayMs") }
+    }
 
     var outputMode: OutputMode = .automatic {
-        didSet { engine?.outputMode = outputMode }
+        didSet {
+            engine?.outputMode = outputMode
+            Self.defaults.set(outputMode.rawValue, forKey: "outputMode")
+        }
+    }
+
+    private static var defaults: UserDefaults { .standard }
+
+    private func loadSettings() {
+        let defaults = Self.defaults
+        lyricChannel = defaults.string(forKey: "lyricChannel").flatMap(LyricsService.Channel.init(rawValue:)) ?? .mix
+        lyricMode = defaults.string(forKey: "lyricMode").flatMap(LyricsService.Mode.init(rawValue:)) ?? .auto
+        lyricLanguage = defaults.string(forKey: "lyricLanguage").flatMap(LyricsService.Language.init(rawValue:)) ?? .translation
+        lyricDelayMs = defaults.integer(forKey: "lyricDelayMs")
+        outputMode = defaults.string(forKey: "outputMode").flatMap(OutputMode.init(rawValue:)) ?? .automatic
+        applyLyricSettings()
+    }
+
+    private func changedLyricSetting(_ key: String, _ value: String) {
+        Self.defaults.set(value, forKey: key)
+        applyLyricSettings()
+    }
+
+    /// Hands the lyric choices to the service, then has the lyrics asked for again so the page shows the result.
+    private func applyLyricSettings() {
+        let service = library.lyrics
+        let channel = lyricChannel
+        let mode = lyricMode
+        let language = lyricLanguage
+        Task { [weak self] in
+            await service.setChannel(channel)
+            await service.setMode(mode)
+            await service.setLanguage(language)
+            self?.lyricsEpoch += 1
+        }
     }
 
     init() {
@@ -100,6 +149,7 @@ final class AppModel {
         bridge.install()
         nowPlaying = bridge
         startMonitoring()
+        loadSettings()
 
         account.onSignedIn = { [weak self] in self?.didSignIn() }
         let signedInAccount = account
@@ -152,6 +202,7 @@ final class AppModel {
         switch Demo.screen {
         case "chart": path = [.chart]
         case "search": path = [.search]
+        case "settings": path = [.settings]
         case "player", "lyrics": path = [.player]
         case "account", "account-scanned", "account-in": path = [.account]
         case "daily": path = [.daily]

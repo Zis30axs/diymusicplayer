@@ -34,11 +34,11 @@ struct LyricsView: View {
     private func lines(_ snapshot: LyricsService.Snapshot, player: MusicPlayer) -> some View {
         if player.isPlaying && !dimmed {
             TimelineView(.animation(minimumInterval: 1.0 / 15)) { _ in
-                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs + app.lyricLeadMs, sweeping: true)
+                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs - Int64(app.lyricDelayMs), sweeping: true)
             }
         } else {
             TimelineView(.periodic(from: .now, by: dimmed ? 1 : 0.5)) { _ in
-                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs + app.lyricLeadMs, sweeping: !dimmed)
+                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs - Int64(app.lyricDelayMs), sweeping: !dimmed)
             }
         }
     }

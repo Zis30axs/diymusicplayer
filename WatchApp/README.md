@@ -46,3 +46,15 @@ runs these in a watch simulator and pushes the PNGs to the `ci-screenshots` bran
 ```bash
 xcrun simctl launch booted com.zis30axs.diymusicplayer.watch -sigma-demo -sigma-screen lyrics -sigma-position 17000
 ```
+
+## On-watch check (M7)
+
+1. Settings (设置) > 歌词: change 来源 / 显示 / 附带 and go back to a playing song: the lyrics page follows. Quit and
+   reopen the app: the choices are still there.
+2. Measuring the lyric delay: play a song with Bluetooth headphones on, open the lyrics page and watch where the
+   sweep is against the singing. If the sweep runs ahead of the voice, raise 设置 > 延迟 in steps of 50 ms until
+   they line up (AirPods are typically somewhere around 150-250 ms); on the built-in speaker the delay is
+   normally 0. Tell me the number and it becomes the default.
+3. Turn Wi-Fi/cellular off and try the hot chart: the message says there is no network connection.
+
+See REINSTALL.md for the 7-day reinstall routine of a free developer account.

@@ -43,7 +43,7 @@ struct TrackListView: View {
         do {
             phase = .loaded(try await load())
         } catch {
-            phase = .failed("加载失败：" + error.localizedDescription)
+            phase = .failed(userMessage(for: error))
         }
     }
 }

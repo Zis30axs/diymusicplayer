@@ -51,7 +51,7 @@ struct PlaylistsView: View {
         do {
             phase = .loaded(try await app.library.playlists(userId: profile.userId))
         } catch {
-            phase = .failed("加载失败：" + error.localizedDescription)
+            phase = .failed(userMessage(for: error))
         }
     }
 }
