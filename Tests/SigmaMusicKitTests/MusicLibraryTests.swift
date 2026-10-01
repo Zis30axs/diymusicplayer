@@ -49,7 +49,8 @@ struct MusicLibraryTests {
         _ = try await library.daily()
         #expect(transport.requests.count == 1)
 
-        let session = try #require(library.netease?.session)
+        let api = try #require(library.netease)
+        let session = api.session
         await session.signIn(cookieText: "MUSIC_U=u1")
         _ = try await library.daily()
         #expect(transport.requests.count == 2)
