@@ -23,3 +23,4 @@ The implementation follows the M0-M7 porting plan. The first code milestone is t
 ## Source provenance
 
 This is a port/adaptation of GPL-3.0 code from `Zis30axs/Sigma-Modern`. Keep source parity tests around Java/Swift boundary behavior, especially UTF-16 string length, lyric timing, and QQ matching.
+天呐，我可不可以不遵守自己的协议？应该没事的吧。
