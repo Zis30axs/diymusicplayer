@@ -7,10 +7,13 @@ on:
       - ".github/workflows/watch-probe-build.yml"
   push:
     branches:
+      - main
       - watch/m0-probe
     paths:
       - "WatchProbe/**"
       - ".github/workflows/watch-probe-build.yml"
+
+  workflow_dispatch:
 
 jobs:
   build:

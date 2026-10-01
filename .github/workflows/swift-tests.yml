@@ -3,8 +3,10 @@ name: Swift tests
 on:
   push:
     branches:
+      - main
       - port/m1-foundation
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:

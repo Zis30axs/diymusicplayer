@@ -11,8 +11,8 @@ The implementation follows the M0-M7 porting plan. The first code milestone is t
 ## Current status
 
 - [x] Repository initialized
-- [ ] M0 device audio/network probe
-- [ ] M1 lyric core + parity tests
+- [x] M0 device audio/network probe (see WatchProbe/README.md for results)
+- [x] M1 lyric core + parity tests
 - [ ] M2 crypto and service APIs
 - [ ] M3 lyric service + queue
 - [ ] M4 watch playback

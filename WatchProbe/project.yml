@@ -16,6 +16,7 @@ targets:
       properties:
         CFBundleDisplayName: DIY Music Probe
         WKApplication: true
+        WKWatchOnly: true
         UIBackgroundModes:
           - audio
     settings:

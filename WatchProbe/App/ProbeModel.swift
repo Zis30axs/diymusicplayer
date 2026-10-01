@@ -12,10 +12,16 @@ final class ProbeModel: ObservableObject {
     @Published private(set) var pathStatus = "Path unknown"
     @Published private(set) var networkStatus = "Not tested"
     @Published private(set) var playbackStatus = "Stopped"
+    @Published private(set) var routeStatus = "Audio route: -"
+    @Published var useLongForm = false
+    @Published private(set) var eventLog: [String] = []
     @Published private(set) var isTestingNetwork = false
     @Published private(set) var isStartingPlayback = false
 
     private var player: AVPlayer?
+    private var monitorTask: Task<Void, Never>?
+    private var lastStateText = ""
+    private var notificationTokens: [NSObjectProtocol] = []
     private let pathMonitor = NWPathMonitor()
     private let pathQueue = DispatchQueue(label: "DIYMusicPlayer.WatchProbe.Path")
 
@@ -26,6 +32,33 @@ final class ProbeModel: ObservableObject {
             }
         }
         pathMonitor.start(queue: pathQueue)
+
+        let center = NotificationCenter.default
+        notificationTokens.append(
+            center.addObserver(
+                forName: AVAudioSession.interruptionNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+                Task { @MainActor in
+                    let kind = raw == AVAudioSession.InterruptionType.began.rawValue ? "began" : "ended"
+                    self?.log("interruption \(kind)")
+                }
+            }
+        )
+        notificationTokens.append(
+            center.addObserver(
+                forName: AVAudioSession.routeChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] note in
+                let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+                Task { @MainActor in
+                    self?.log("route change: \(Self.describeRouteChange(raw))")
+                }
+            }
+        )
     }
 
     deinit {
@@ -93,35 +126,22 @@ final class ProbeModel: ObservableObject {
         Task {
             defer { isStartingPlayback = false }
             do {
-                let session = AVAudioSession.sharedInstance()
-                try session.setCategory(.playback, mode: .default)
-                try session.setActive(true)
+                if useLongForm {
+                    log("activating longFormAudio (Bluetooth required)")
+                    try await Self.activateLongFormSession()
+                } else {
+                    let session = AVAudioSession.sharedInstance()
+                    try session.setCategory(.playback, mode: .default)
+                    try session.setActive(true)
+                }
+                log("play: \(useLongForm ? "longFormAudio" : "default policy")")
 
                 let item = AVPlayerItem(url: url)
                 let nextPlayer = AVPlayer(playerItem: item)
                 player = nextPlayer
                 nextPlayer.play()
 
-                try await Task.sleep(nanoseconds: 1_500_000_000)
-
-                switch nextPlayer.timeControlStatus {
-                case .playing:
-                    playbackStatus = "Playing"
-                case .waitingToPlayAtSpecifiedRate:
-                    if let reason = nextPlayer.reasonForWaitingToPlay {
-                        playbackStatus = "Waiting · \(reason.rawValue)"
-                    } else {
-                        playbackStatus = "Waiting for stream"
-                    }
-                case .paused:
-                    if let error = item.error {
-                        playbackStatus = "Failed · \(Self.short(error))"
-                    } else {
-                        playbackStatus = "Paused by player"
-                    }
-                @unknown default:
-                    playbackStatus = "Unknown player state"
-                }
+                startMonitoring(since: Date())
             } catch {
                 playbackStatus = "Failed · \(Self.short(error))"
             }
@@ -130,20 +150,106 @@ final class ProbeModel: ObservableObject {
 
     func pause() {
         player?.pause()
-        playbackStatus = player == nil ? "Stopped" : "Paused"
+        if player == nil { playbackStatus = "Stopped" }
     }
 
     func stop() {
+        monitorTask?.cancel()
+        monitorTask = nil
         player?.pause()
         player?.replaceCurrentItem(with: nil)
         player = nil
         playbackStatus = "Stopped"
+        routeStatus = "Audio route: -"
+        lastStateText = ""
+        log("stop")
         try? AVAudioSession.sharedInstance().setActive(false)
+    }
+
+    func log(_ message: String) {
+        let stamp = Date.now.formatted(.dateTime.hour().minute().second())
+        eventLog.append("\(stamp) \(message)")
+        if eventLog.count > 8 {
+            eventLog.removeFirst(eventLog.count - 8)
+        }
+    }
+
+    private nonisolated static func activateLongFormSession() async throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+        _ = try await session.activate(options: [])
+    }
+
+    private static func describeRouteChange(_ raw: UInt?) -> String {
+        guard let raw, let reason = AVAudioSession.RouteChangeReason(rawValue: raw) else {
+            return "unknown"
+        }
+        switch reason {
+        case .newDeviceAvailable: return "new device"
+        case .oldDeviceUnavailable: return "device lost"
+        case .categoryChange: return "category"
+        case .wakeFromSleep: return "wake"
+        case .noSuitableRouteForCategory: return "no route"
+        case .routeConfigurationChange: return "config"
+        default: return "other(\(raw))"
+        }
+    }
+
+    /// Refreshes the live playback state twice a second so the screen never shows a stale snapshot.
+    /// `t` is the player's own clock and `wall` is the wall clock since Play. If `t` keeps up with
+    /// `wall` after the app returns from the background, playback really kept running.
+    private func startMonitoring(since started: Date) {
+        monitorTask?.cancel()
+        monitorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.refreshPlaybackStatus(since: started)
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+    }
+
+    private func refreshPlaybackStatus(since started: Date) {
+        guard let player else { return }
+
+        let seconds = player.currentTime().seconds
+        let position = seconds.isFinite ? String(format: "%.1f", seconds) : "-"
+        let wall = Int(Date().timeIntervalSince(started))
+
+        let state: String
+        switch player.timeControlStatus {
+        case .playing:
+            state = "Playing"
+        case .waitingToPlayAtSpecifiedRate:
+            state = "Waiting · " + (player.reasonForWaitingToPlay?.rawValue ?? "buffering")
+        case .paused:
+            if let error = player.currentItem?.error {
+                state = "Failed · " + Self.short(error)
+            } else {
+                state = "Paused"
+            }
+        @unknown default:
+            state = "Unknown player state"
+        }
+
+        playbackStatus = "\(state)\nt=\(position)s · wall=\(wall)s"
+        if state != lastStateText {
+            lastStateText = state
+            log("player: \(state) t=\(position)")
+        }
+
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        if outputs.isEmpty {
+            routeStatus = "Audio route: none"
+        } else {
+            let names = outputs.map { "\($0.portName) [\($0.portType.rawValue)]" }
+            routeStatus = "Audio route: " + names.joined(separator: ", ")
+        }
     }
 
     private static func describe(_ path: NWPath) -> String {
         guard path.status == .satisfied else {
-            return "No network"
+            return "NWPath unsatisfied (Test HTTPS is the real check)"
         }
 
         var transports: [String] = []
