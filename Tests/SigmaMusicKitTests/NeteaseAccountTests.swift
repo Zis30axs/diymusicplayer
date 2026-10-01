@@ -190,16 +190,18 @@ struct NeteaseAccountTests {
         #expect(await eventually { account.state.qrText == "https://music.163.com/login?codekey=key-0" })
         account.startLogin()
         #expect(await eventually { account.state.qrText == "https://music.163.com/login?codekey=key-1" })
-        try? await Task.sleep(for: .milliseconds(100))
 
         // After the second code is on show, only its key is polled.
-        let polled = try transport.requests.compactMap { request -> String? in
-            let decrypted = try request.decryptedEapi()
-            return decrypted.path.hasSuffix("/client/login") ? decrypted.json["key"]?.string : nil
+        func polledKeys() -> [String] {
+            transport.requests.compactMap { request -> String? in
+                guard let decrypted = try? request.decryptedEapi(), decrypted.path.hasSuffix("/client/login") else { return nil }
+                return decrypted.json["key"]?.string
+            }
         }
-        let firstOfSecond = polled.firstIndex(of: "key-1")
-        #expect(firstOfSecond != nil)
-        if let firstOfSecond {
+        #expect(await eventually { polledKeys().contains("key-1") })
+        try? await Task.sleep(for: .milliseconds(50))
+        let polled = polledKeys()
+        if let firstOfSecond = polled.firstIndex(of: "key-1") {
             #expect(polled[firstOfSecond...].allSatisfy { $0 == "key-1" })
         }
         account.cancelLogin()
