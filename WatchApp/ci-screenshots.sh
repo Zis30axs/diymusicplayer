@@ -53,7 +53,6 @@ shot player      -sigma-demo -sigma-screen player -sigma-position 12000
 shot lyrics-intro -sigma-demo -sigma-screen lyrics -sigma-position 3000
 shot lyrics-cjk  -sigma-demo -sigma-screen lyrics -sigma-position 12500
 shot lyrics-word -sigma-demo -sigma-screen lyrics -sigma-position 17000
-shot lyrics-debug -sigma-demo -sigma-debug -sigma-screen lyrics -sigma-position 17000
 shot search      -sigma-demo -sigma-screen search
 shot chart       -sigma-screen chart
 xcrun simctl shutdown "$UDID" > /dev/null 2>&1 || true

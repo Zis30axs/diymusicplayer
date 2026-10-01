@@ -88,11 +88,13 @@ private struct LyricLines: View {
 
     var body: some View {
         let index = lyrics.index(at: position) ?? -1
+        let hasTranslation = lyrics.lines.indices.contains(index) && lyrics.lines[index].translation != nil
         VStack(spacing: 5) {
             side(index - 1, past: true)
             current(index)
             side(index + 1, past: false)
-            side(index + 2, past: false)
+            // The screen is small: a translation takes the place of the second upcoming line.
+            if !hasTranslation { side(index + 2, past: false) }
         }
         .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.25), value: index)
@@ -104,8 +106,9 @@ private struct LyricLines: View {
             Text(lyrics.lines[index].text)
                 .font(past ? .caption2 : .caption)
                 .foregroundStyle(.primary.opacity(past ? 0.3 : 0.5))
-                .lineLimit(2)
+                .lineLimit(past ? 1 : 2)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -135,6 +138,7 @@ private struct LyricLines: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         } else {
