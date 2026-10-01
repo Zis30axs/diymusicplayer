@@ -27,6 +27,13 @@ public func userMessage(for error: any Error) -> String {
             return "当前没有联网的音乐来源"
         }
     }
+    if let download = error as? DownloadError {
+        switch download {
+        case .preview: return "只有试听片段，登录 VIP 账号后才能下载全曲"
+        case .unavailable: return "网易云没有这首歌的音频"
+        case .incomplete: return "下载的文件不完整，请重试"
+        }
+    }
     if let url = error as? URLError {
         switch url.code {
         case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:

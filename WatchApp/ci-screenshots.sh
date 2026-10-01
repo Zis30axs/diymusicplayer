@@ -58,6 +58,7 @@ shot search      -sigma-demo -sigma-screen search
 shot settings    -sigma-demo -sigma-screen settings
 shot settings-net -sigma-demo -sigma-screen settings-net
 shot daily       -sigma-demo -sigma-screen daily
+shot downloads   -sigma-demo -sigma-screen downloads
 shot account      -sigma-demo -sigma-screen account
 shot account-scanned -sigma-demo -sigma-screen account-scanned
 shot account-in   -sigma-demo -sigma-screen account-in

@@ -32,6 +32,12 @@ struct HomeView: View {
                 NavigationLink(value: Route.search) {
                     Label("搜索", systemImage: "magnifyingglass")
                 }
+                NavigationLink(value: Route.downloads) {
+                    Label(
+                        app.downloads.items.isEmpty ? "已下载" : "已下载（\(app.downloads.items.count)）",
+                        systemImage: "arrow.down.circle"
+                    )
+                }
                 NavigationLink(value: Route.settings) {
                     Label("设置", systemImage: "gearshape")
                 }
@@ -64,6 +70,8 @@ struct HomeView: View {
                     AccountView()
                 case .settings:
                     SettingsView()
+                case .downloads:
+                    DownloadsView()
                 }
             }
         }

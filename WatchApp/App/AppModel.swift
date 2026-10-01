@@ -12,15 +12,22 @@ enum Route: Hashable {
     case playlist(id: Int64, name: String)
     case account
     case settings
+    case downloads
 }
 
 /// Wires the SigmaMusicKit pieces together for the watch: one session on disk, one library, one engine.
 @MainActor
 @Observable
 final class AppModel {
+    /// The one model: the system can start the app in the background to hand over finished downloads.
+    static let shared = AppModel()
+
     let player: MusicPlayer
     @ObservationIgnored let engine: PlayerEngine?
     @ObservationIgnored let library: MusicLibrary
+    /// Songs saved on the watch, and the system transfer behind them (`nil` in the demo).
+    let downloads: DownloadCenter
+    @ObservationIgnored let downloader: URLSessionFileTransfer?
     /// `nil` in the demo (no network).
     @ObservationIgnored let netease: NeteaseApi?
     let account: NeteaseAccount
@@ -113,6 +120,10 @@ final class AppModel {
         if Demo.isOn {
             library = MusicLibrary(netease: nil)
             netease = nil
+            downloader = nil
+            let demoDownloads = DownloadCenter(store: Demo.downloadStore(), source: Demo.downloadSource, transfer: DemoTransfer())
+            downloads = demoDownloads
+            if Demo.screen == "downloads" { demoDownloads.download(Demo.tracks[2]) }
             account = NeteaseAccount(session: NeteaseSession(store: MemorySessionStore()))
             engine = nil
             player = MusicPlayer(backend: SilentBackend(), source: ListSource(name: "演示", tracks: Demo.tracks))
@@ -154,7 +165,19 @@ final class AppModel {
         library = MusicLibrary(netease: api)
         netease = api
         account = NeteaseAccount(session: session)
-        let engine = PlayerEngine(resolver: PlayerEngine.neteaseResolver(api, quality: Self.storedAudioQuality))
+        let store = DownloadStore.applicationSupport()
+        let transfer = URLSessionFileTransfer(identifier: Self.downloadSessionId)
+        downloader = transfer
+        downloads = DownloadCenter(
+            store: store,
+            source: DownloadCenter.neteaseSource(api, quality: Self.storedAudioQuality),
+            transfer: transfer
+        )
+        // A saved song plays from its file (no network needed); anything else is streamed.
+        let engine = PlayerEngine(resolver: PlayerEngine.downloadsFirst(
+            store,
+            fallback: PlayerEngine.neteaseResolver(api, quality: Self.storedAudioQuality)
+        ))
         self.engine = engine
         player = MusicPlayer(backend: engine, source: ListSource(name: "", tracks: []))
         openLaunchScreen()
@@ -197,6 +220,14 @@ final class AppModel {
         }
     }
 
+    nonisolated static let downloadSessionId = "com.zis30axs.diymusicplayer.watch.downloads"
+
+    /// The system started the app to deliver downloads that finished while it was away.
+    func finishBackgroundDownloads() async {
+        await downloader?.waitForBackgroundEvents()
+        await downloads.reconcile()
+    }
+
     /// Asks again for the current track's lyrics after a failure, or for QQ Music's word timing after a miss.
     func retryLyrics() {
         let track = player.current
@@ -232,6 +263,7 @@ final class AppModel {
         case "player", "lyrics", "lyrics-miss": path = [.player]
         case "account", "account-scanned", "account-in": path = [.account]
         case "daily": path = [.daily]
+        case "downloads": path = [.downloads]
         case "playlists": path = [.playlists]
         default: break
         }
