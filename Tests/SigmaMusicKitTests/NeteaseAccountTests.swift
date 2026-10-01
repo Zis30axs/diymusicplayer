@@ -31,7 +31,7 @@ struct NeteaseAccountTests {
         return condition()
     }
 
-    private static let unikey = #"{"code":200,"unikey":"abc-123"}"#
+    private nonisolated static let unikey = #"{"code":200,"unikey":"abc-123"}"#
 
     final class Counter: @unchecked Sendable {
         private let lock = NSLock()
@@ -227,7 +227,7 @@ struct NeteaseAccountTests {
 
     // MARK: Profile
 
-    private static let profileReply = """
+    private nonisolated static let profileReply = """
     {"code":200,"account":{"id":7,"vipType":0},"profile":{"userId":42,"nickname":"听歌的人","avatarUrl":"https://a/b.jpg","vipType":11}}
     """
 
