@@ -44,6 +44,57 @@ struct QQMusicApiTests {
         #expect(request.headers["Referer"] == "https://y.qq.com/")
     }
 
+    private static let smartbox = """
+    {"code":0,"data":{"song":{"count":3,"itemlist":[
+      {"docid":"4835784","id":"4835784","mid":"mid1","name":"测试","singer":"歌手"},
+      {"docid":"7","id":"bad","name":"falls back to docid","singer":""},
+      {"id":"0","name":"no id"}
+    ]}},"subcode":0}
+    """
+
+    @Test func parsesSmartboxSuggestions() throws {
+        let tracks = QQMusicApi.suggestions(from: try JSON.parse(Self.smartbox))
+        #expect(tracks == [
+            QQMusicApi.QQTrack(songId: 4_835_784, songMid: "mid1", name: "测试", artist: "歌手", album: "", durationMs: 0),
+            QQMusicApi.QQTrack(songId: 7, songMid: "", name: "falls back to docid", artist: "", album: "", durationMs: 0),
+        ])
+    }
+
+    @Test func searchFallsBackToSmartboxWhenTheMainEndpointFails() async throws {
+        let transport = MockTransport { request, _ in
+            request.url.path == "/soso/fcgi-bin/client_search_cp"
+                ? HTTPResponse(status: 500)
+                : MockTransport.json(Self.smartbox)
+        }
+        let tracks = try await QQMusicApi(transport: transport).search("测试", limit: 1)
+        #expect(tracks.map(\.songId) == [4_835_784])
+        #expect(transport.requests.map(\.url.path) == ["/soso/fcgi-bin/client_search_cp", "/splcloud/fcgi-bin/smartbox_new.fcg"])
+    }
+
+    @Test func searchFallsBackWhenTheMainEndpointFindsNothing() async throws {
+        let transport = MockTransport { request, _ in
+            request.url.path == "/soso/fcgi-bin/client_search_cp"
+                ? MockTransport.json(#"{"data":{"song":{"list":[]}}}"#)
+                : MockTransport.json(Self.smartbox)
+        }
+        #expect(try await QQMusicApi(transport: transport).search("测试", limit: 5).count == 2)
+    }
+
+    @Test func searchReportsTheMainErrorWhenBothFail() async {
+        let transport = MockTransport { _, _ in HTTPResponse(status: 500) }
+        await #expect(throws: MusicServiceError.http(status: 500, path: "/soso/fcgi-bin/client_search_cp")) {
+            try await QQMusicApi(transport: transport).search("x", limit: 5)
+        }
+    }
+
+    @Test func mainEndpointResultsSkipTheFallback() async throws {
+        let transport = MockTransport { _, _ in
+            MockTransport.json(#"{"data":{"song":{"list":[{"songid":5,"songname":"a","singer":[]}]}}}"#)
+        }
+        #expect(try await QQMusicApi(transport: transport).search("x", limit: 5).count == 1)
+        #expect(transport.requests.count == 1)
+    }
+
     @Test func blankSearchMakesNoRequest() async throws {
         let transport = MockTransport { _, _ in MockTransport.json("{}") }
         #expect(try await QQMusicApi(transport: transport).search("   ", limit: 5).isEmpty)

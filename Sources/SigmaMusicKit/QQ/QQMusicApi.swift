@@ -6,6 +6,8 @@ import Foundation
 /// Neither endpoint needs a login.
 public struct QQMusicApi: Sendable {
     static let searchURL = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp"
+    // Lighter and more widely reachable: ids, mids, names and artists, but no durations.
+    static let smartboxURL = "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg"
     // The old desktop-client endpoint: XML carrying the lyrics as hex (triple modified-DES + zlib). Numeric ids only.
     static let lyricURL = "https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg"
     static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -48,13 +50,30 @@ public struct QQMusicApi: Sendable {
         self.transport = transport
     }
 
+    /// `client_search_cp` first (it has durations); some networks get an empty HTTP 500 from it, so
+    /// when it fails or finds nothing the smartbox suggestions answer instead.
     public func search(_ keyword: String, limit: Int) async throws -> [QQTrack] {
         let trimmed = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-        let url = Self.searchURL + "?format=json&p=1&n=\(max(1, limit))&w=" + URLEncoding.form(trimmed)
-        let body = try await get(url, referer: "https://y.qq.com/")
-        let root = try JSON.parse(body)
-        return Self.tracks(from: root)
+
+        var primaryError: (any Error)?
+        do {
+            let url = Self.searchURL + "?format=json&p=1&n=\(max(1, limit))&w=" + URLEncoding.form(trimmed)
+            let tracks = Self.tracks(from: try JSON.parse(try await get(url, referer: "https://y.qq.com/")))
+            if !tracks.isEmpty { return tracks }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            primaryError = error
+        }
+
+        do {
+            let url = Self.smartboxURL + "?format=json&key=" + URLEncoding.form(trimmed)
+            let tracks = Self.suggestions(from: try JSON.parse(try await get(url, referer: "https://y.qq.com/")))
+            return Array(tracks.prefix(max(1, limit)))
+        } catch {
+            throw primaryError ?? error
+        }
     }
 
     public func fetchLyrics(songId: Int64) async throws -> QQLyrics? {
@@ -80,6 +99,22 @@ public struct QQMusicApi: Sendable {
     static func tracks(from root: JSON) -> [QQTrack] {
         guard let list = root["data"]?["song"]?["list"]?.array else { return [] }
         return list.compactMap(track)
+    }
+
+    /// The `song.itemlist` of a smartbox reply: `{"id":"4835784","mid":"...","name":"...","singer":"..."}`.
+    static func suggestions(from root: JSON) -> [QQTrack] {
+        guard let list = root["data"]?["song"]?["itemlist"]?.array else { return [] }
+        return list.compactMap { item in
+            guard let id = item["id"]?.int64 ?? item["docid"]?.int64, id > 0 else { return nil }
+            return QQTrack(
+                songId: id,
+                songMid: item["mid"]?.string ?? "",
+                name: item["name"]?.string ?? "",
+                artist: item["singer"]?.string ?? "",
+                album: "",
+                durationMs: 0
+            )
+        }
     }
 
     static func track(from song: JSON) -> QQTrack? {
