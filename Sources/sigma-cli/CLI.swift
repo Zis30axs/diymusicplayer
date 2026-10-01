@@ -13,6 +13,7 @@ enum CLI {
       qq <keyword> [limit]        QQ Music search
       mix <keyword> [--show]      NetEase track + QQ word-timed lyrics, end to end
       smoke [keyword]             Every service call once; exits 1 if any step fails
+      probe [keyword]             Raw status/size of the calls that can fail by region (debugging)
 
     State (device fingerprint, cookies) lives in $SIGMA_DATA_DIR or ~/.sigma-music.
     """
@@ -38,6 +39,8 @@ enum CLI {
                 return try await mix(services, rest)
             case "smoke":
                 return await smoke(services, rest)
+            case "probe":
+                return await probe(services, rest)
             default:
                 print(usage)
                 return 2
@@ -240,6 +243,69 @@ enum CLI {
 
         print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
         return failures == 0 ? 0 : 1
+    }
+
+    // MARK: Probe
+
+    /// What each endpoint actually answers (status, size, a short prefix of the body), for working out
+    /// why a call fails from a given network. Prints song titles at most, never lyric text.
+    static func probe(_ services: Services, _ args: [String]) async -> Int32 {
+        let keyword = args.first ?? "Beyond 海阔天空"
+
+        print("== NetEase stream, first results")
+        if let tracks = try? await services.netease.search(keyword, limit: 3) {
+            for track in tracks {
+                guard let songId = try? NeteaseApi.songId(of: track) else { continue }
+                for level in ["exhigh", "standard"] {
+                    let params: JSON = ["ids": .string("[\(songId)]"), "level": .string(level), "encodeType": "mp3"]
+                    do {
+                        let reply = try await services.netease.session.eapi("/api/song/enhance/player/url/v1", params)
+                        let item = reply["data"]?[0]
+                        let fields = [
+                            "code=\(reply["code"]?.int.map(String.init) ?? "-")",
+                            "itemCode=\(item?["code"]?.int.map(String.init) ?? "-")",
+                            "fee=\(item?["fee"]?.int.map(String.init) ?? "-")",
+                            "type=\(item?["type"]?.string ?? "-")",
+                            "br=\(item?["br"]?.int.map(String.init) ?? "-")",
+                            "url=\(item?["url"]?.string != nil)",
+                            "trial=\(item?["freeTrialInfo"]?.isNull == false)",
+                            "message=\(reply["message"]?.string ?? "-")",
+                        ]
+                        print("\(track.id) \(level): " + fields.joined(separator: " "))
+                    } catch {
+                        print("\(track.id) \(level): \(describe(error))")
+                    }
+                }
+            }
+        } else {
+            print("search failed")
+        }
+
+        print("== QQ search variants")
+        let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? keyword
+        let plus = keyword.replacingOccurrences(of: " ", with: "+")
+            .addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "+"))) ?? keyword
+        let variants: [(String, String, [String: String])] = [
+            ("client_search_cp", "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&p=1&n=3&w=\(encoded)", ["Referer": "https://y.qq.com/"]),
+            ("client_search_cp (+)", "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&p=1&n=3&w=\(plus)", ["Referer": "https://y.qq.com/"]),
+            ("client_search_cp (no referer)", "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?format=json&p=1&n=3&w=\(encoded)", [:]),
+            ("lyric_download", "https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg?version=15&miniversion=82&lrctype=4&musicid=1", ["Referer": "https://y.qq.com/portal/player.html"]),
+            ("smartbox", "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg?key=\(encoded)&format=json", ["Referer": "https://y.qq.com/"]),
+        ]
+        let transport = URLSessionTransport()
+        for (name, address, extra) in variants {
+            guard let url = URL(string: address) else { continue }
+            var headers = ["User-Agent": QQMusicApi.userAgent]
+            headers.merge(extra) { _, new in new }
+            do {
+                let response = try await transport.send(HTTPRequest(url: url, headers: headers, timeout: 8))
+                let prefix = String(response.text.prefix(160)).replacingOccurrences(of: "\n", with: " ")
+                print("\(name): status=\(response.status) bytes=\(response.body.count) type=\(response.header("content-type") ?? "-") body=\(prefix)")
+            } catch {
+                print("\(name): \(describe(error))")
+            }
+        }
+        return 0
     }
 
     // MARK: Helpers
