@@ -7,6 +7,7 @@ struct LyricsView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.isLuminanceReduced) private var dimmed
     @State private var snapshot: LyricsService.Snapshot?
+    @State private var trace = ""
 
     private struct Key: Equatable, Sendable {
         var trackId: String?
@@ -34,16 +35,19 @@ struct LyricsView: View {
         .padding(.horizontal, 4)
         .overlay(alignment: .topLeading) {
             if Demo.isOn && CommandLine.arguments.contains("-sigma-debug") {
-                Text("snap=\(snapshot == nil ? "nil" : "ok") lines=\(snapshot?.lyrics.lines.count ?? -1) why=\(snapshot.map { "\($0.why)" } ?? "-") pos=\(player.positionMs)")
+                Text("snap=\(snapshot == nil ? "nil" : "ok") lines=\(snapshot?.lyrics.lines.count ?? -1) why=\(snapshot.map { "\($0.why)" } ?? "-") pos=\(player.positionMs) \(trace)")
                     .font(.system(size: 8))
                     .foregroundStyle(.yellow)
             }
         }
         .task(id: Key(trackId: player.current?.id, epoch: app.lyricsEpoch)) {
+            trace += " start(e\(app.lyricsEpoch))"
             snapshot = nil
             for await next in await app.library.lyrics.updates(for: player.current) {
+                trace += " got(\(next.lyrics.lines.count),\(next.done))"
                 snapshot = next
             }
+            trace += " end"
         }
     }
 
