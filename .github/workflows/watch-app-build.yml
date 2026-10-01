@@ -18,6 +18,9 @@ on:
       - ".github/workflows/watch-app-build.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -45,11 +48,39 @@ jobs:
             -scheme SigmaWatch \
             -configuration Debug \
             -sdk watchsimulator \
+            -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             build 2>&1 | tee "$RUNNER_TEMP/build.log" | tail -40
+
+      - name: Screenshots (demo mode in a watch simulator)
+        id: shots
+        continue-on-error: true
+        working-directory: WatchApp
+        run: |
+          APP=$(find build/Build/Products -name SigmaWatch.app -maxdepth 3 | head -1)
+          bash ci-screenshots.sh "$RUNNER_TEMP/shots" "$PWD/$APP" 2>&1 | tee "$RUNNER_TEMP/shots.log"
+
+      - name: Publish screenshots to the ci-screenshots branch
+        if: always() && github.event_name == 'push'
+        continue-on-error: true
+        run: |
+          if ! ls "$RUNNER_TEMP"/shots/*.png >/dev/null 2>&1; then exit 0; fi
+          REMOTE="https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          rm -rf "$RUNNER_TEMP/pub"
+          if git clone --depth 1 --branch ci-screenshots "$REMOTE" "$RUNNER_TEMP/pub" 2>/dev/null; then :; else
+            mkdir "$RUNNER_TEMP/pub" && cd "$RUNNER_TEMP/pub" && git init -q -b ci-screenshots && git remote add origin "$REMOTE"
+          fi
+          cd "$RUNNER_TEMP/pub"
+          rm -rf latest && mkdir latest
+          cp "$RUNNER_TEMP"/shots/*.png latest/
+          echo "${GITHUB_SHA}" > latest/SHA
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A && git commit -q -m "screenshots for ${GITHUB_SHA}" && git push -q origin ci-screenshots
 
       - name: Summary
         if: always()
         run: |
           echo "::notice title=xcodebuild errors::$(grep -E 'error:' "$RUNNER_TEMP/build.log" | head -20 | sed 's/%/%25/g' | tr '\n' '|')"
+          if [ -f "$RUNNER_TEMP/shots.log" ]; then echo "::notice title=screenshots::$(tail -25 "$RUNNER_TEMP/shots.log" | sed 's/%/%25/g' | tr '\n' '|')"; fi
           echo "::notice title=xcodebuild result::$(grep -E 'BUILD (SUCCEEDED|FAILED)' "$RUNNER_TEMP/build.log" | tail -1)"

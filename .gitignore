@@ -19,3 +19,4 @@ WatchApp/.team
 WatchProbe/.watch-device
 
 .DS_Store
+WatchApp/build/
