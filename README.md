@@ -13,12 +13,25 @@ The implementation follows the M0-M7 porting plan. The first code milestone is t
 - [x] Repository initialized
 - [x] M0 device audio/network probe (see WatchProbe/README.md for results)
 - [x] M1 lyric core + parity tests
-- [ ] M2 crypto and service APIs
+- [x] M2 crypto and service APIs (NetEase weapi/eapi, QQ QRC decrypt, `sigma-cli`; stream URLs still to be confirmed from a mainland network, see below)
 - [ ] M3 lyric service + queue
 - [ ] M4 watch playback
 - [ ] M5 watch UI
 - [ ] M6 QR login
 - [ ] M7 settings and polish
+
+## Trying the service layer
+
+```bash
+swift test                      # unit tests, including parity vectors generated from the Java originals
+swift run sigma-cli smoke       # every NetEase/QQ call once against the live services
+swift run sigma-cli search "海阔天空"
+swift run sigma-cli mix "Beyond 海阔天空" --show   # NetEase track + QQ word-timed lyrics
+```
+
+`smoke` prints counts and timings only, never lyric text. Run from a US network (the `Live smoke` GitHub
+workflow) NetEase search, playlists, lyrics and QQ QRC decryption all pass, but NetEase answers every stream
+URL request with item code 404 (region restriction); run `smoke` from a mainland network to confirm streaming.
 
 ## Source provenance
 
