@@ -7,6 +7,10 @@ enum Route: Hashable {
     case chart
     case search
     case player
+    case daily
+    case playlists
+    case playlist(id: Int64, name: String)
+    case account
 }
 
 /// Wires the SigmaMusicKit pieces together for the watch: one session on disk, one library, one engine.
@@ -16,6 +20,7 @@ final class AppModel {
     let player: MusicPlayer
     @ObservationIgnored let engine: PlayerEngine?
     @ObservationIgnored let library: MusicLibrary
+    let account: NeteaseAccount
     @ObservationIgnored private var nowPlaying: NowPlayingBridge?
     @ObservationIgnored private var monitorTask: Task<Void, Never>?
     @ObservationIgnored private var lyricsKey: LyricsKey?
@@ -45,6 +50,7 @@ final class AppModel {
     init() {
         if Demo.isOn {
             library = MusicLibrary(netease: nil)
+            account = NeteaseAccount(session: NeteaseSession(store: MemorySessionStore()))
             engine = nil
             player = MusicPlayer(backend: SilentBackend(), source: ListSource(name: "演示", tracks: Demo.tracks))
             player.select(0, play: false)
@@ -54,14 +60,35 @@ final class AppModel {
                 await lyrics.setOverride(Demo.lyrics)
                 self?.lyricsEpoch += 1
             }
+            switch Demo.screen {
+            case "account":
+                account.preview(.init(.waiting, qrText: NeteaseAccount.qrPrefix + "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"))
+            case "account-scanned":
+                account.preview(.init(
+                    .scanned, qrText: NeteaseAccount.qrPrefix + "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d", scanner: "示例用户"
+                ))
+            case "account-in":
+                account.preview(
+                    .init(.signedIn),
+                    profile: .init(userId: 1, nickname: "示例用户", avatarUrl: nil, vip: true)
+                )
+            default: break
+            }
             openLaunchScreen()
             startMonitoring()
             return
         }
 
-        let store = FileSessionStore.applicationSupport(folder: "SigmaWatch")
-        let api = NeteaseApi(session: NeteaseSession(store: store))
+        // The Keychain outlives a reinstall (a free developer account needs one every 7 days); files written by
+        // an earlier version are still read, and used if the Keychain refuses a write.
+        let store = KeychainSessionStore(
+            service: "com.zis30axs.diymusicplayer.watch",
+            fallback: FileSessionStore.applicationSupport(folder: "SigmaWatch")
+        )
+        let session = NeteaseSession(store: store)
+        let api = NeteaseApi(session: session)
         library = MusicLibrary(netease: api)
+        account = NeteaseAccount(session: session)
         let engine = PlayerEngine(resolver: PlayerEngine.neteaseResolver(api))
         self.engine = engine
         player = MusicPlayer(backend: engine, source: ListSource(name: "", tracks: []))
@@ -73,6 +100,20 @@ final class AppModel {
         bridge.install()
         nowPlaying = bridge
         startMonitoring()
+
+        account.onSignedIn = { [weak self] in self?.didSignIn() }
+        let signedInAccount = account
+        Task {
+            await signedInAccount.restore()
+            if signedInAccount.state.phase == .signedIn { await signedInAccount.loadProfile() }
+        }
+    }
+
+    /// A QR login just succeeded: a track that was only a preview plays in full now, and the account's name is fetched.
+    private func didSignIn() {
+        if player.isPreview || player.problem != nil { player.reloadCurrent() }
+        let signedInAccount = account
+        Task { await signedInAccount.loadProfile() }
     }
 
     /// Four times a second: notice a track change (and look its lyrics up); once a second: tell the system
@@ -112,6 +153,9 @@ final class AppModel {
         case "chart": path = [.chart]
         case "search": path = [.search]
         case "player", "lyrics": path = [.player]
+        case "account", "account-scanned", "account-in": path = [.account]
+        case "daily": path = [.daily]
+        case "playlists": path = [.playlists]
         default: break
         }
     }
