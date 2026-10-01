@@ -4,7 +4,7 @@ import SigmaMusicKit
 /// Two pages you swipe between with the crown: the controls, and the lyrics.
 struct NowPlayingView: View {
     @Environment(AppModel.self) private var app
-    @State private var page = Demo.screen == "lyrics" ? 1 : 0
+    @State private var page = ["lyrics", "lyrics-miss"].contains(Demo.screen ?? "") ? 1 : 0
 
     var body: some View {
         TabView(selection: $page) {
@@ -23,14 +23,19 @@ private struct ControlsPage: View {
         ScrollView {
             VStack(spacing: 8) {
                 if let track = player.current {
-                    Text(track.title)
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                    Text(track.artist)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    HStack(spacing: 8) {
+                        Artwork(url: track.cover, side: 56)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(track.title)
+                                .font(.headline)
+                                .lineLimit(2)
+                            Text(track.artist)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
 
                     PositionBar(player: player)
 

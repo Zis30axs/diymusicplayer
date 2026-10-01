@@ -12,7 +12,7 @@ public struct QQMusicApi: Sendable {
     static let lyricURL = "https://c.y.qq.com/qqmusic/fcgi-bin/lyric_download.fcg"
     static let userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    public static let timeout: TimeInterval = 8
+    public static let timeout: TimeInterval = 12
 
     /// A search result. `durationMs` is 0 when unknown.
     public struct QQTrack: Sendable, Equatable {

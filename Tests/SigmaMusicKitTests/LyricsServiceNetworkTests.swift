@@ -9,10 +9,16 @@ struct LyricsServiceNetworkTests {
         var neteaseLyric = #"{"code":200}"#
         var qqSearch = #"{"data":{"song":{"list":[]}}}"#
         var qqLyricXML = "<lyric></lyric>"
+        /// Answers for particular searches (by keyword) and particular songs' lyrics (by id).
+        var qqSearches: [String: String] = [:]
+        var qqLyrics: [String: String] = [:]
+        var qqSmartbox = #"{"data":{"song":{"itemlist":[]}}}"#
 
         static let line = #"{"code":200,"lrc":{"lyric":"[00:00.00]line one\n[00:05.00]line two"},"tlyric":{"lyric":"[00:00.00]译文一"}}"#
         static let word = #"{"code":200,"yrc":{"lyric":"[0,2000](0,500,0)你(500,500,0)好(1000,1000,0)"},"lrc":{"lyric":"[00:00.00]你好"}}"#
         static let instrumental = #"{"code":200,"pureMusic":true}"#
+        /// A match for `track` below, with a second copy of the same song.
+        static let qqTwoCopies = #"{"data":{"song":{"list":[{"songid":1001,"songname":"测试","singer":[{"name":"歌手"}],"interval":200},{"songid":1002,"songname":"测试","singer":[{"name":"歌手"}],"interval":201}]}}}"#
         static let qqMatch = #"{"data":{"song":{"list":[{"songid":1001,"songmid":"m","songname":"测试","singer":[{"name":"歌手"}],"interval":200}]}}}"#
         static var qqXML: String {
             "<lyric><content><![CDATA[\(QQDecoderVectors.cases[0].hex)]]></content></lyric>"
@@ -21,19 +27,38 @@ struct LyricsServiceNetworkTests {
 
     private let track = Track(id: "netease:42", title: "测试", artist: "歌手 / 别人", durationMs: 200_000)
 
+    /// Switches QQ Music off and on, for failures that clear up.
+    final class Switch: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Bool
+
+        init(_ value: Bool) { self.value = value }
+
+        var isOn: Bool {
+            get { lock.withLock { value } }
+            set { lock.withLock { value = newValue } }
+        }
+    }
+
     private func service(
         _ channel: LyricsService.Channel = .mix,
         world: World,
-        cacheSize: Int = 64
+        cacheSize: Int = 64,
+        qqDown: Switch = Switch(false)
     ) -> (LyricsService, MockTransport) {
         let transport = MockTransport { request, _ in
+            if request.url.host == "c.y.qq.com", qqDown.isOn { return HTTPResponse(status: 500) }
+            let query = URLComponents(url: request.url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            func value(_ name: String) -> String { query.first { $0.name == name }?.value ?? "" }
             switch (request.url.host, request.url.path) {
             case ("interface.music.163.com", "/eapi/song/lyric/v1"):
                 return MockTransport.json(world.neteaseLyric)
             case ("c.y.qq.com", "/soso/fcgi-bin/client_search_cp"):
-                return MockTransport.json(world.qqSearch)
+                return MockTransport.json(world.qqSearches[value("w")] ?? world.qqSearch)
+            case ("c.y.qq.com", "/splcloud/fcgi-bin/smartbox_new.fcg"):
+                return MockTransport.json(world.qqSmartbox)
             case ("c.y.qq.com", "/qqmusic/fcgi-bin/lyric_download.fcg"):
-                return MockTransport.json(world.qqLyricXML)
+                return MockTransport.json(world.qqLyrics[value("musicid")] ?? world.qqLyricXML)
             default:
                 return HTTPResponse(status: 404)
             }
@@ -43,7 +68,8 @@ struct LyricsServiceNetworkTests {
             channel: channel,
             netease: NeteaseApi(session: session),
             qq: QQMusicApi(transport: transport),
-            cacheSize: cacheSize
+            cacheSize: cacheSize,
+            qqRetryDelay: .zero
         )
         return (service, transport)
     }
@@ -191,6 +217,214 @@ struct LyricsServiceNetworkTests {
     @Test func withoutAnOnlineSourceEveryTrackIsEmpty() async {
         let service = LyricsService()
         #expect(await service.snapshot(for: track) == .empty)
+    }
+
+    // MARK: Why QQ did not word-time a song
+
+    @Test func aMatchIsReportedAsSuch() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearch = World.qqMatch
+        world.qqLyricXML = World.qqXML
+        let (service, _) = service(world: world)
+        #expect(await finished(service, track).qq == QQReport(.matched))
+    }
+
+    @Test func noSearchResultsAreReported() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        let (service, _) = service(world: world)
+        let result = await finished(service, track)
+        #expect(result.qq == QQReport(.noResults))
+        #expect(result.provider == .netease)
+        #expect(result.qq?.summary == "QQ 没搜到这首歌")
+    }
+
+    @Test func aCandidateThatIsNotTheSongIsReportedWithHowClose() async throws {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearch = #"{"data":{"song":{"list":[{"songid":7,"songname":"完全不同的歌","singer":[{"name":"路人"}],"interval":90}]}}}"#
+        let (service, _) = service(world: world)
+        let result = await finished(service, track)
+        guard case .belowThreshold(let best, let score)? = result.qq?.outcome else {
+            Issue.record("expected belowThreshold, got \(String(describing: result.qq))")
+            return
+        }
+        #expect(best == "完全不同的歌 - 路人")
+        #expect(score < QQMusicMatcher.minimumScore)
+    }
+
+    @Test func aSongWithoutWordTimingIsReported() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearch = World.qqMatch
+        world.qqLyricXML = "<lyric></lyric>"
+        let (service, _) = service(world: world)
+        let result = await finished(service, track)
+        #expect(result.qq == QQReport(.noWordTiming(best: "测试 - 歌手")))
+        #expect(result.raw.kind == .line)
+    }
+
+    @Test func neteaseWordTimingNeverAsksQQSoThereIsNoReport() async {
+        var world = World()
+        world.neteaseLyric = World.word
+        let (service, _) = service(world: world)
+        #expect(await finished(service, track).qq == nil)
+    }
+
+    // MARK: Trying harder
+
+    @Test func aFailedRequestIsTriedAgain() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearch = World.qqMatch
+        world.qqLyricXML = World.qqXML
+        let answers = world
+        let flaky = MockTransport { request, index in
+            // QQ's first two requests (the search and its smartbox fallback) fail; everything after works.
+            if request.url.host == "c.y.qq.com", index < 3 { return HTTPResponse(status: 500) }
+            switch request.url.path {
+            case "/eapi/song/lyric/v1": return MockTransport.json(answers.neteaseLyric)
+            case "/soso/fcgi-bin/client_search_cp": return MockTransport.json(answers.qqSearch)
+            case "/qqmusic/fcgi-bin/lyric_download.fcg": return MockTransport.json(answers.qqLyricXML)
+            default: return HTTPResponse(status: 404)
+            }
+        }
+        let session = NeteaseSession(store: MemorySessionStore(), transport: flaky)
+        let service = LyricsService(
+            netease: NeteaseApi(session: session),
+            qq: QQMusicApi(transport: flaky),
+            qqRetryDelay: .zero
+        )
+        let result = await finished(service, track)
+        #expect(result.provider == .qq)
+        #expect(result.qq == QQReport(.matched))
+    }
+
+    @Test func aBroaderSearchFindsWhatTheFirstOneMissed() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearches = ["测试 歌手": #"{"data":{"song":{"list":[]}}}"#, "测试": World.qqMatch]
+        world.qqLyricXML = World.qqXML
+        let (service, transport) = service(world: world)
+        let result = await finished(service, track)
+        #expect(result.provider == .qq)
+        let searches = transport.requests.compactMap { URLComponents(url: $0.url, resolvingAgainstBaseURL: false)?.queryItems }
+            .compactMap { $0.first { $0.name == "w" }?.value }
+        #expect(searches == ["测试 歌手", "测试"])
+    }
+
+    @Test func aBroaderSearchIgnoresOtherPeoplesSongsWithTheSameName() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearches = [
+            "测试 歌手": #"{"data":{"song":{"list":[]}}}"#,
+            "测试": #"{"data":{"song":{"list":[{"songid":9,"songname":"测试","singer":[{"name":"另一个人"}],"interval":200}]}}}"#,
+        ]
+        world.qqLyricXML = World.qqXML
+        let (service, transport) = service(world: world)
+        let result = await finished(service, track)
+        #expect(result.provider == .netease)
+        #expect(!transport.requests.contains { $0.url.path.hasSuffix("lyric_download.fcg") })
+    }
+
+    @Test func anotherCopyOfTheSongIsTriedWhenTheBestHasNoWordTiming() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearch = World.qqTwoCopies
+        world.qqLyrics = ["1001": "<lyric></lyric>", "1002": World.qqXML]
+        let (service, _) = service(world: world)
+        let result = await finished(service, track)
+        #expect(result.provider == .qq)
+        #expect(result.raw.kind == .word)
+    }
+
+    @Test func retryingAfterQQRecoversGivesTheWordTiming() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearch = World.qqMatch
+        world.qqLyricXML = World.qqXML
+        let down = Switch(true)
+        let (service, _) = service(world: world, qqDown: down)
+
+        let first = await finished(service, track)
+        #expect(first.provider == .netease)
+        guard case .failed? = first.qq?.outcome else {
+            Issue.record("expected a failure, got \(String(describing: first.qq))")
+            return
+        }
+        #expect(first.done)
+
+        down.isOn = false
+        await service.retry(for: track)
+        let retried = await finished(service, track)
+        #expect(retried.provider == .qq)
+        #expect(retried.raw.kind == .word)
+        #expect(retried.qq == QQReport(.matched))
+        // NetEase's translation still fills the gap after the retry.
+        #expect(retried.raw.lines.first?.translation == "译文一")
+    }
+
+    @Test func retryingShowsTheLinesAlreadyFoundWhileQQIsAskedAgain() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        let (service, _) = service(world: world)
+        _ = await finished(service, track)
+        await service.retry(for: track)
+        let during = await service.snapshot(for: track)
+        #expect(during.raw.lines.count == 2)
+        _ = await finished(service, track)
+    }
+
+    @Test func aMatchedTrackIsNotAskedAgain() async {
+        var world = World()
+        world.neteaseLyric = World.line
+        world.qqSearch = World.qqMatch
+        world.qqLyricXML = World.qqXML
+        let (service, transport) = service(world: world)
+        _ = await finished(service, track)
+        let before = transport.requests.count
+        await service.retry(for: track)
+        _ = await finished(service, track)
+        #expect(transport.requests.count == before)
+    }
+
+    @Test func aFailedNeteaseLookupStartsOverOnRetry() async {
+        let up = Switch(false)
+        let transport = MockTransport { request, _ in
+            if !up.isOn { return HTTPResponse(status: 500) }
+            return request.url.path == "/eapi/song/lyric/v1"
+                ? MockTransport.json(World.line)
+                : MockTransport.json(#"{"data":{"song":{"list":[]}}}"#)
+        }
+        let session = NeteaseSession(store: MemorySessionStore(), transport: transport)
+        let service = LyricsService(netease: NeteaseApi(session: session), qq: QQMusicApi(transport: transport), qqRetryDelay: .zero)
+
+        let first = await finished(service, track)
+        #expect(first.raw == .none)
+        #expect(first.failure != nil)
+
+        up.isOn = true
+        await service.retry(for: track)
+        let again = await finished(service, track)
+        #expect(again.failure == nil)
+        #expect(again.raw.kind == .line)
+    }
+
+    @Test func theQueriesGoFromTheOriginalsToTheTitleAlone() {
+        #expect(LyricsService.qqQueries(title: "测试", artist: "歌手").map(\.text) == ["测试 歌手", "测试"])
+        #expect(LyricsService.qqQueries(title: "测试 (Live)", artist: "歌手").map(\.text)
+            == ["测试 (Live) 歌手", "测试 歌手", "测试"])
+        #expect(LyricsService.qqQueries(title: "测试", artist: "").count == 1)
+    }
+
+    @Test func anOverrideCanCarryTheQQAccount() async {
+        let (service, _) = service(world: World())
+        let report = QQReport(.noResults)
+        await service.setOverride(Lyrics(kind: .line, lines: []), qq: report)
+        #expect(await service.snapshot(for: track).qq == report)
+        await service.setOverride(nil)
+        #expect(await service.snapshot(for: track).qq == nil)
     }
 
     // MARK: Presentation

@@ -52,7 +52,10 @@ struct HomeView: View {
                 case .player:
                     NowPlayingView()
                 case .daily:
-                    TrackListView(title: "每日推荐") { try await app.library.daily() }
+                    TrackListView(title: "每日推荐") {
+                        if Demo.isOn { return ListSource(name: "示例", tracks: Demo.tracks) }
+                        return try await app.library.daily()
+                    }
                 case .playlists:
                     PlaylistsView()
                 case .playlist(let id, let name):

@@ -53,8 +53,11 @@ shot player      -sigma-demo -sigma-screen player -sigma-position 12000
 shot lyrics-intro -sigma-demo -sigma-screen lyrics -sigma-position 3000
 shot lyrics-cjk  -sigma-demo -sigma-screen lyrics -sigma-position 12500
 shot lyrics-word -sigma-demo -sigma-screen lyrics -sigma-position 17000
+shot lyrics-miss -sigma-demo -sigma-screen lyrics-miss -sigma-position 12500
 shot search      -sigma-demo -sigma-screen search
 shot settings    -sigma-demo -sigma-screen settings
+shot settings-net -sigma-demo -sigma-screen settings-net
+shot daily       -sigma-demo -sigma-screen daily
 shot account      -sigma-demo -sigma-screen account
 shot account-scanned -sigma-demo -sigma-screen account-scanned
 shot account-in   -sigma-demo -sigma-screen account-in

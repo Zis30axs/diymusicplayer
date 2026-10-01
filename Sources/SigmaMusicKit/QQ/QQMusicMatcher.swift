@@ -46,6 +46,53 @@ public enum QQMusicMatcher {
         return best
     }
 
+    /// The candidate that looks most like the song, whatever its score (for saying how close the search got).
+    public static func closest(
+        _ candidates: [Candidate],
+        title: String,
+        artist: String,
+        durationMs: Int64
+    ) -> Match? {
+        candidates
+            .map { Match(track: $0, score: score($0, title: title, artist: artist, durationMs: durationMs)) }
+            .max { $0.score < $1.score }
+    }
+
+    /// Every candidate good enough to be the song, best first. The first is what `match` returns; the rest
+    /// are other QQ copies of the song (QQ often lists a single, an album track and a live take apart), tried
+    /// in turn when the best one has no word-timed lyrics. A later copy must also be about as long as the
+    /// song when both lengths are known, so its timing still fits.
+    public static func ranked(
+        _ candidates: [Candidate],
+        title: String,
+        artist: String,
+        durationMs: Int64
+    ) -> [Match] {
+        let scored = candidates
+            .map { Match(track: $0, score: score($0, title: title, artist: artist, durationMs: durationMs)) }
+            .filter { $0.score >= minimumScore }
+            .enumerated()
+            .sorted { lhs, rhs in
+                lhs.element.score != rhs.element.score ? lhs.element.score > rhs.element.score : lhs.offset < rhs.offset
+            }
+            .map(\.element)
+        guard let first = scored.first else { return [] }
+        let others = scored.dropFirst().filter { match in
+            guard durationMs > 0, match.track.durationMs > 0 else { return true }
+            return abs(durationMs - match.track.durationMs) <= 10_000
+        }
+        return [first] + others
+    }
+
+    /// How alike two artist names are: 1 when one holds the other ("A" in "A/B"), 0.5 when either is unknown.
+    public static func artistScore(_ artist: String, _ other: String) -> Double {
+        let a = normalize(artist)
+        let b = normalize(other)
+        if a.isEmpty || b.isEmpty { return 0.5 }
+        if a.contains(b) || b.contains(a) { return 1 }
+        return similarity(a, b)
+    }
+
     public static func score(
         _ candidate: Candidate,
         title: String,
@@ -53,17 +100,7 @@ public enum QQMusicMatcher {
         durationMs: Int64
     ) -> Double {
         let titleScore = similarity(normalize(title), normalize(candidate.name))
-        let a = normalize(artist)
-        let b = normalize(candidate.artist)
-
-        let artistScore: Double
-        if a.isEmpty || b.isEmpty {
-            artistScore = 0.5
-        } else if a.contains(b) || b.contains(a) {
-            artistScore = 1
-        } else {
-            artistScore = similarity(a, b)
-        }
+        let artistFit = artistScore(artist, candidate.artist)
 
         let durationScore: Double
         if durationMs <= 0 || candidate.durationMs <= 0 {
@@ -79,7 +116,7 @@ public enum QQMusicMatcher {
             }
         }
 
-        return 0.5 * titleScore + 0.25 * artistScore + 0.25 * durationScore
+        return 0.5 * titleScore + 0.25 * artistFit + 0.25 * durationScore
     }
 
     public static func normalize(_ text: String?) -> String {

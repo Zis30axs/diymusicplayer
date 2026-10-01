@@ -3,9 +3,12 @@ import SigmaMusicKit
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
+    @State private var steps: [NetworkCheck.Step] = Demo.screen == "settings-net" ? Demo.networkSteps : []
+    @State private var checking = false
 
     var body: some View {
         @Bindable var settings = app
+        ScrollViewReader { proxy in
         List {
             Section("歌词") {
                 Picker("来源", selection: $settings.lyricChannel) {
@@ -34,6 +37,13 @@ struct SettingsView: View {
                 }
             }
             Section("声音") {
+                Picker("音质", selection: $settings.audioQuality) {
+                    Text("标准 128k").tag(NeteaseApi.StreamQuality.standard)
+                    Text("较高 320k").tag(NeteaseApi.StreamQuality.high)
+                }
+                Text("网慢或常卡顿，就用标准")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
                 Picker("输出", selection: $settings.outputMode) {
                     Text("自动").tag(OutputMode.automatic)
                     Text("耳机").tag(OutputMode.headphones)
@@ -43,7 +53,46 @@ struct SettingsView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
+            Section("网络") {
+                Button {
+                    Task { await runCheck() }
+                } label: {
+                    if checking {
+                        HStack(spacing: 6) { ProgressView(); Text("测速中…") }
+                    } else {
+                        Text(steps.isEmpty ? "测速" : "再测一次")
+                    }
+                }
+                .disabled(checking || app.netease == nil)
+                .id("network")
+                ForEach(steps) { step in
+                    VStack(alignment: .leading, spacing: 1) {
+                        HStack {
+                            Text(step.name).font(.caption2)
+                            Spacer(minLength: 4)
+                            Text(step.millis.map { "\($0) 毫秒" } ?? "失败")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(step.millis == nil ? Color.red : Color.secondary)
+                        }
+                        if !step.detail.isEmpty {
+                            Text(step.detail).font(.system(size: 10)).foregroundStyle(.red)
+                        }
+                    }
+                }
+            }
+        }
+        .onAppear {
+            if Demo.screen == "settings-net" { proxy.scrollTo("network", anchor: .top) }
+        }
         }
         .navigationTitle("设置")
+    }
+
+    private func runCheck() async {
+        checking = true
+        steps = []
+        let result = await NetworkCheck(netease: app.netease).run()
+        steps = result
+        checking = false
     }
 }
