@@ -28,12 +28,29 @@ if [ -z "$DEVICE" ]; then
   exit 1
 fi
 
+# Signing team: $DEVELOPMENT_TEAM, else WatchApp/.team (gitignored, one team id), else the team set in a local
+# WatchProbe/project.yml (DEVELOPMENT_TEAM: XXXXXXXXXX). Without one, xcodebuild cannot sign for the watch.
+TEAM="${DEVELOPMENT_TEAM:-}"
+if [ -z "$TEAM" ] && [ -f .team ]; then
+  TEAM=$(tr -d '[:space:]' < .team)
+fi
+if [ -z "$TEAM" ] && [ -f ../WatchProbe/project.yml ]; then
+  TEAM=$(grep -E '^[[:space:]]*DEVELOPMENT_TEAM:' ../WatchProbe/project.yml | head -1 | sed -E 's/.*DEVELOPMENT_TEAM:[[:space:]]*"?([A-Z0-9]+)"?.*/\1/')
+fi
+TEAM_ARG=""
+if [ -n "$TEAM" ]; then
+  TEAM_ARG="DEVELOPMENT_TEAM=$TEAM"
+  echo "== Signing team $TEAM"
+else
+  echo "== No signing team found: set DEVELOPMENT_TEAM=<id> or put it in WatchApp/.team (Xcode > Settings > Accounts shows it)"
+fi
+
 BUNDLE_ID="com.zis30axs.diymusicplayer.watch"
 LOG="${TMPDIR:-/tmp}/sigmawatch-build.log"
 
 echo "== Building for $DEVICE"
 if ! xcodebuild -project SigmaWatch.xcodeproj -scheme SigmaWatch -configuration Debug \
-    -destination "platform=watchOS,id=$DEVICE" -allowProvisioningUpdates build > "$LOG" 2>&1; then
+    -destination "platform=watchOS,id=$DEVICE" -allowProvisioningUpdates $TEAM_ARG build > "$LOG" 2>&1; then
   echo "Build FAILED. Errors (full log: $LOG):"
   grep -E "error:" "$LOG" | head -20
   tail -15 "$LOG"

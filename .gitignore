@@ -13,6 +13,7 @@ WatchProbe/App/Info.plist
 WatchApp/SigmaWatch.xcodeproj/
 WatchApp/App/Info.plist
 WatchApp/.watch-device
+WatchApp/.team
 
 # Local device selection for WatchProbe/run-on-watch.sh
 WatchProbe/.watch-device
