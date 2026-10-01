@@ -38,7 +38,7 @@ struct SearchView: View {
             if found.tracks.isEmpty { message = "没有找到「\(text)」" }
         } catch {
             results = nil
-            message = "搜索失败：" + error.localizedDescription
+            message = userMessage(for: error)
         }
     }
 }

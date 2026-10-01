@@ -32,6 +32,9 @@ struct HomeView: View {
                 NavigationLink(value: Route.search) {
                     Label("搜索", systemImage: "magnifyingglass")
                 }
+                NavigationLink(value: Route.settings) {
+                    Label("设置", systemImage: "gearshape")
+                }
                 NavigationLink(value: Route.account) {
                     Label(
                         app.account.state.phase == .signedIn ? (app.account.profile?.nickname ?? "账号") : "登录网易云",
@@ -56,6 +59,8 @@ struct HomeView: View {
                     TrackListView(title: name) { try await app.library.playlist(id: id, name: name, limit: 100) }
                 case .account:
                     AccountView()
+                case .settings:
+                    SettingsView()
                 }
             }
         }
