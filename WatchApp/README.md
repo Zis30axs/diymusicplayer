@@ -29,3 +29,13 @@ Do these on the watch, on a mainland network (Wi-Fi or 4G), with headphones for 
 6. Turn the headphones off → playback pauses (it must not jump to the speaker).
 
 If a song fails, the red line under the buttons says why.
+
+## Looking at the UI without a watch
+
+`-sigma-demo` starts the app with made-up tracks and lyrics and no network; `-sigma-screen home|chart|search|player|lyrics`
+opens a screen at launch and `-sigma-position <ms>` sets the playback position. The `Watch app build` workflow
+runs these in a watch simulator and pushes the PNGs to the `ci-screenshots` branch (`latest/`).
+
+```bash
+xcrun simctl launch booted com.zis30axs.diymusicplayer.watch -sigma-demo -sigma-screen lyrics -sigma-position 17000
+```

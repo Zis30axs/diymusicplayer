@@ -1,11 +1,25 @@
 import SwiftUI
 import SigmaMusicKit
 
-struct ContentView: View {
-    @Environment(AppModel.self) private var model
+/// Two pages you swipe between with the crown: the controls, and the lyrics.
+struct NowPlayingView: View {
+    @Environment(AppModel.self) private var app
+    @State private var page = Demo.screen == "lyrics" ? 1 : 0
 
     var body: some View {
-        let player = model.player
+        TabView(selection: $page) {
+            ControlsPage().tag(0)
+            LyricsView().tag(1)
+        }
+        .tabViewStyle(.verticalPage)
+    }
+}
+
+private struct ControlsPage: View {
+    @Environment(AppModel.self) private var app
+
+    var body: some View {
+        let player = app.player
         ScrollView {
             VStack(spacing: 8) {
                 if let track = player.current {
@@ -34,28 +48,19 @@ struct ContentView: View {
                     if player.isPreview {
                         Text("仅试听片段").font(.caption2).foregroundStyle(.orange)
                     }
-                } else {
-                    Button {
-                        model.playChart()
-                    } label: {
-                        Label("播放热歌榜", systemImage: "music.note.list")
+                    if let problem = player.problem {
+                        Text(problem).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center)
                     }
-                    .disabled(model.isLoading)
                 }
 
-                if !model.status.isEmpty {
-                    Text(model.status).font(.caption2).multilineTextAlignment(.center)
+                if app.engine != nil {
+                    Picker("输出", selection: Binding(get: { app.outputMode }, set: { app.outputMode = $0 })) {
+                        Text("自动").tag(OutputMode.automatic)
+                        Text("耳机").tag(OutputMode.headphones)
+                        Text("扬声器").tag(OutputMode.speaker)
+                    }
+                    .font(.caption)
                 }
-                if let problem = player.problem {
-                    Text(problem).font(.caption2).foregroundStyle(.red).multilineTextAlignment(.center)
-                }
-
-                Picker("输出", selection: Binding(get: { model.outputMode }, set: { model.outputMode = $0 })) {
-                    Text("自动").tag(OutputMode.automatic)
-                    Text("耳机").tag(OutputMode.headphones)
-                    Text("扬声器").tag(OutputMode.speaker)
-                }
-                .font(.caption)
             }
             .padding(.horizontal, 4)
         }

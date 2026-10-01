@@ -2,61 +2,128 @@ import Foundation
 import Observation
 import SigmaMusicKit
 
+/// Where the navigation stack can go.
+enum Route: Hashable {
+    case chart
+    case search
+    case player
+}
+
 /// Wires the SigmaMusicKit pieces together for the watch: one session on disk, one library, one engine.
 @MainActor
 @Observable
 final class AppModel {
     let player: MusicPlayer
-    @ObservationIgnored let engine: PlayerEngine
+    @ObservationIgnored let engine: PlayerEngine?
     @ObservationIgnored let library: MusicLibrary
-    @ObservationIgnored private let nowPlaying: NowPlayingBridge
-    @ObservationIgnored private var nowPlayingTask: Task<Void, Never>?
+    @ObservationIgnored private var nowPlaying: NowPlayingBridge?
+    @ObservationIgnored private var monitorTask: Task<Void, Never>?
+    @ObservationIgnored private var lyricsKey: LyricsKey?
+    @ObservationIgnored private var lyricsTask: Task<Void, Never>?
 
-    /// What the start screen says while loading or after a failure.
-    private(set) var status = ""
-    private(set) var isLoading = false
+    private struct LyricsKey: Equatable {
+        var trackId: String?
+        var epoch: Int
+    }
+
+    var path: [Route] = []
+
+    /// Bumped when the lyric lookup is reconfigured, so the lyrics are asked for again.
+    private(set) var lyricsEpoch = 0
+
+    /// The current track's lyrics as far as they are known; `nil` until the lookup has answered once.
+    private(set) var lyrics: LyricsService.Snapshot?
+
+    /// Added to the playback position before lyrics are matched: positive shows lyrics earlier. Bluetooth
+    /// headphones delay the sound, so this is where a measured offset goes (M7).
+    var lyricLeadMs: Int64 = 0
 
     var outputMode: OutputMode = .automatic {
-        didSet { engine.outputMode = outputMode }
+        didSet { engine?.outputMode = outputMode }
     }
 
     init() {
+        if Demo.isOn {
+            library = MusicLibrary(netease: nil)
+            engine = nil
+            player = MusicPlayer(backend: SilentBackend(), source: ListSource(name: "演示", tracks: Demo.tracks))
+            player.select(0, play: false)
+            if let position = Demo.positionMs { player.seek(to: position) }
+            let lyrics = library.lyrics
+            Task { [weak self] in
+                await lyrics.setOverride(Demo.lyrics)
+                self?.lyricsEpoch += 1
+            }
+            openLaunchScreen()
+            startMonitoring()
+            return
+        }
+
         let store = FileSessionStore.applicationSupport(folder: "SigmaWatch")
         let api = NeteaseApi(session: NeteaseSession(store: store))
         library = MusicLibrary(netease: api)
-        engine = PlayerEngine(resolver: PlayerEngine.neteaseResolver(api))
+        let engine = PlayerEngine(resolver: PlayerEngine.neteaseResolver(api))
+        self.engine = engine
         player = MusicPlayer(backend: engine, source: ListSource(name: "", tracks: []))
-        nowPlaying = NowPlayingBridge(player: player)
+        openLaunchScreen()
 
         player.setVolume(1)  // the headphones and the crown own the loudness on the watch
         player.startAutoUpdate(every: .milliseconds(500))
-        nowPlaying.install()
-        nowPlayingTask = Task { [weak self] in
+        let bridge = NowPlayingBridge(player: player)
+        bridge.install()
+        nowPlaying = bridge
+        startMonitoring()
+    }
+
+    /// Four times a second: notice a track change (and look its lyrics up); once a second: tell the system
+    /// what is playing. Kept here rather than in a view so it never restarts with the screen.
+    private func startMonitoring() {
+        monitorTask = Task { [weak self] in
+            var tick = 0
             while !Task.isCancelled {
-                self?.nowPlaying.refresh()
-                try? await Task.sleep(for: .seconds(1))
+                guard let self else { return }
+                self.syncLyrics()
+                tick += 1
+                if tick % 4 == 0 { self.nowPlaying?.refresh() }
+                try? await Task.sleep(for: .milliseconds(250))
             }
         }
     }
 
-    /// Queues the hot chart and starts playing it.
-    func playChart() {
-        guard !isLoading else { return }
-        isLoading = true
-        status = "正在加载热歌榜…"
-        Task {
-            defer { isLoading = false }
-            do {
-                let source = try await library.chart()
-                guard !source.tracks.isEmpty else {
-                    status = "热歌榜是空的"
-                    return
-                }
-                status = ""
-                player.setSource(source, start: 0, play: true)
-            } catch {
-                status = "加载失败：" + error.localizedDescription
+    private func syncLyrics() {
+        let key = LyricsKey(trackId: player.current?.id, epoch: lyricsEpoch)
+        guard key != lyricsKey else { return }
+        lyricsKey = key
+        lyricsTask?.cancel()
+        lyrics = nil
+        let track = player.current
+        let service = library.lyrics
+        lyricsTask = Task { [weak self] in
+            for await next in await service.updates(for: track) {
+                if Task.isCancelled { return }
+                self?.lyrics = next
             }
         }
+    }
+
+    /// `-sigma-screen <name>` on the command line opens that screen at launch (for screenshots).
+    private func openLaunchScreen() {
+        switch Demo.screen {
+        case "chart": path = [.chart]
+        case "search": path = [.search]
+        case "player", "lyrics": path = [.player]
+        default: break
+        }
+    }
+
+    /// Queues `source` from `start` and plays it.
+    func play(_ source: ListSource, start: Int) {
+        player.setSource(source, start: start, play: true)
+    }
+
+    /// Plays the track from the open list and shows the player.
+    func playAndShow(_ source: ListSource, start: Int) {
+        play(source, start: start)
+        path.append(.player)
     }
 }
