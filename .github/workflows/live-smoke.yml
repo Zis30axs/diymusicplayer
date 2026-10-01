@@ -19,7 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build sigma-cli
-        run: swift build --product sigma-cli
+        run: |
+          set -o pipefail
+          swift build --product sigma-cli 2>&1 | tee build.log
       - name: Run smoke test
         env:
           KEYWORD: ${{ inputs.keyword }}
@@ -36,6 +38,8 @@ jobs:
       - name: Summarize results
         if: always()
         run: |
+          msg=$(grep -E "error:" build.log 2>/dev/null | head -30 | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"}1')
+          [ -n "$msg" ] && echo "::notice title=build errors::${msg}"
           msg=$(sed 's/%/%25/g' smoke.log 2>/dev/null | awk 'BEGIN{ORS="%0A"}1')
           echo "::notice title=live smoke::${msg}"
           msg=$(sed 's/%/%25/g' probe.log 2>/dev/null | awk 'BEGIN{ORS="%0A"}1')

@@ -262,11 +262,11 @@ enum CLI {
                         let reply = try await services.netease.session.eapi("/api/song/enhance/player/url/v1", params)
                         let item = reply["data"]?[0]
                         let fields = [
-                            "code=\(reply["code"]?.int.map(String.init) ?? "-")",
-                            "itemCode=\(item?["code"]?.int.map(String.init) ?? "-")",
-                            "fee=\(item?["fee"]?.int.map(String.init) ?? "-")",
+                            "code=\(reply["code"]?.int.map { String($0) } ?? "-")",
+                            "itemCode=\(item?["code"]?.int.map { String($0) } ?? "-")",
+                            "fee=\(item?["fee"]?.int.map { String($0) } ?? "-")",
                             "type=\(item?["type"]?.string ?? "-")",
-                            "br=\(item?["br"]?.int.map(String.init) ?? "-")",
+                            "br=\(item?["br"]?.int.map { String($0) } ?? "-")",
                             "url=\(item?["url"]?.string != nil)",
                             "trial=\(item?["freeTrialInfo"]?.isNull == false)",
                             "message=\(reply["message"]?.string ?? "-")",
