@@ -1,6 +1,13 @@
 import Foundation
 #if canImport(MediaPlayer)
 import MediaPlayer
+#if canImport(UIKit)
+import UIKit
+private typealias CoverImage = UIImage
+#elseif canImport(AppKit)
+import AppKit
+private typealias CoverImage = NSImage
+#endif
 
 /// Shows the player in the system's Now Playing screen and routes its remote commands (AirPods buttons,
 /// the lock-screen controls, the Digital Crown's Now Playing app) to a `MusicPlayer`.
@@ -11,6 +18,9 @@ import MediaPlayer
 public final class NowPlayingBridge {
     private let player: MusicPlayer
     private var registered: [(command: MPRemoteCommand, token: Any)] = []
+    // The cover of the track on show (loaded once per track; a track whose cover failed is not retried).
+    private var artwork: (trackId: String, item: MPMediaItemArtwork)?
+    private var artworkRequested: String?
 
     public init(player: MusicPlayer) {
         self.player = player
@@ -62,7 +72,32 @@ public final class NowPlayingBridge {
         if duration > 0 {
             info[MPMediaItemPropertyPlaybackDuration] = Double(duration) / 1000
         }
+        if let artwork, artwork.trackId == track.id {
+            info[MPMediaItemPropertyArtwork] = artwork.item
+        } else {
+            requestArtwork(for: track)
+        }
         center.nowPlayingInfo = info
+    }
+
+    private func requestArtwork(for track: Track) {
+        guard artworkRequested != track.id, let cover = track.cover,
+              let url = NeteaseApi.imageURL(cover, side: 300) else { return }
+        artworkRequested = track.id
+        let trackId = track.id
+        Task { [weak self] in
+            guard let item = await Self.loadArtwork(url) else { return }
+            self?.artwork = (trackId, item)
+            self?.refresh()
+        }
+    }
+
+    private nonisolated static func loadArtwork(_ url: URL) async -> MPMediaItemArtwork? {
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode ?? 200 < 400,
+              let image = CoverImage(data: data) else { return nil }
+        let box = ImageBox(image)
+        return MPMediaItemArtwork(boundsSize: image.size) { _ in box.image }
     }
 
     private func add(_ command: MPRemoteCommand, _ action: @escaping @MainActor (NowPlayingBridge) -> Void) {
@@ -73,6 +108,14 @@ public final class NowPlayingBridge {
             return .success
         }
         registered.append((command, token))
+    }
+}
+
+private final class ImageBox: @unchecked Sendable {
+    let image: CoverImage
+
+    init(_ image: CoverImage) {
+        self.image = image
     }
 }
 #endif

@@ -21,6 +21,8 @@ final class AppModel {
     let player: MusicPlayer
     @ObservationIgnored let engine: PlayerEngine?
     @ObservationIgnored let library: MusicLibrary
+    /// `nil` in the demo (no network).
+    @ObservationIgnored let netease: NeteaseApi?
     let account: NeteaseAccount
     @ObservationIgnored private var nowPlaying: NowPlayingBridge?
     @ObservationIgnored private var monitorTask: Task<Void, Never>?
@@ -58,6 +60,16 @@ final class AppModel {
         didSet { Self.defaults.set(lyricDelayMs, forKey: "lyricDelayMs") }
     }
 
+    /// What to ask NetEase for. 128k starts sooner and stalls less over a watch's link; 320k sounds better.
+    var audioQuality: NeteaseApi.StreamQuality = .standard {
+        didSet { Self.defaults.set(audioQuality.rawValue, forKey: "audioQuality") }
+    }
+
+    /// Read by the stream resolver (off the main actor) each time a song starts.
+    nonisolated static func storedAudioQuality() -> NeteaseApi.StreamQuality {
+        UserDefaults.standard.string(forKey: "audioQuality").flatMap(NeteaseApi.StreamQuality.init(rawValue:)) ?? .standard
+    }
+
     var outputMode: OutputMode = .automatic {
         didSet {
             engine?.outputMode = outputMode
@@ -74,6 +86,7 @@ final class AppModel {
         lyricLanguage = defaults.string(forKey: "lyricLanguage").flatMap(LyricsService.Language.init(rawValue:)) ?? .translation
         lyricDelayMs = defaults.integer(forKey: "lyricDelayMs")
         outputMode = defaults.string(forKey: "outputMode").flatMap(OutputMode.init(rawValue:)) ?? .automatic
+        audioQuality = Self.storedAudioQuality()
         applyLyricSettings()
     }
 
@@ -99,6 +112,7 @@ final class AppModel {
     init() {
         if Demo.isOn {
             library = MusicLibrary(netease: nil)
+            netease = nil
             account = NeteaseAccount(session: NeteaseSession(store: MemorySessionStore()))
             engine = nil
             player = MusicPlayer(backend: SilentBackend(), source: ListSource(name: "演示", tracks: Demo.tracks))
@@ -106,7 +120,7 @@ final class AppModel {
             if let position = Demo.positionMs { player.seek(to: position) }
             let lyrics = library.lyrics
             Task { [weak self] in
-                await lyrics.setOverride(Demo.lyrics)
+                await lyrics.setOverride(Demo.lyrics, qq: Demo.screen == "lyrics-miss" ? Demo.missedQQ : nil)
                 self?.lyricsEpoch += 1
             }
             switch Demo.screen {
@@ -114,12 +128,13 @@ final class AppModel {
                 account.preview(.init(.waiting, qrText: NeteaseAccount.qrPrefix + "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"))
             case "account-scanned":
                 account.preview(.init(
-                    .scanned, qrText: NeteaseAccount.qrPrefix + "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d", scanner: "示例用户"
+                    .scanned, qrText: NeteaseAccount.qrPrefix + "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+                    scanner: "示例用户", scannerAvatar: Demo.avatar
                 ))
             case "account-in":
                 account.preview(
                     .init(.signedIn),
-                    profile: .init(userId: 1, nickname: "示例用户", avatarUrl: nil, vip: true)
+                    profile: .init(userId: 1, nickname: "示例用户", avatarUrl: Demo.avatar, vip: true)
                 )
             default: break
             }
@@ -137,8 +152,9 @@ final class AppModel {
         let session = NeteaseSession(store: store)
         let api = NeteaseApi(session: session)
         library = MusicLibrary(netease: api)
+        netease = api
         account = NeteaseAccount(session: session)
-        let engine = PlayerEngine(resolver: PlayerEngine.neteaseResolver(api))
+        let engine = PlayerEngine(resolver: PlayerEngine.neteaseResolver(api, quality: Self.storedAudioQuality))
         self.engine = engine
         player = MusicPlayer(backend: engine, source: ListSource(name: "", tracks: []))
         openLaunchScreen()
@@ -181,6 +197,16 @@ final class AppModel {
         }
     }
 
+    /// Asks again for the current track's lyrics after a failure, or for QQ Music's word timing after a miss.
+    func retryLyrics() {
+        let track = player.current
+        let service = library.lyrics
+        Task { [weak self] in
+            await service.retry(for: track)
+            self?.lyricsEpoch += 1
+        }
+    }
+
     private func syncLyrics() {
         let key = LyricsKey(trackId: player.current?.id, epoch: lyricsEpoch)
         guard key != lyricsKey else { return }
@@ -202,8 +228,8 @@ final class AppModel {
         switch Demo.screen {
         case "chart": path = [.chart]
         case "search": path = [.search]
-        case "settings": path = [.settings]
-        case "player", "lyrics": path = [.player]
+        case "settings", "settings-net": path = [.settings]
+        case "player", "lyrics", "lyrics-miss": path = [.player]
         case "account", "account-scanned", "account-in": path = [.account]
         case "daily": path = [.daily]
         case "playlists": path = [.playlists]

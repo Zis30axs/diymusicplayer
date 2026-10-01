@@ -1,4 +1,6 @@
+import CoreGraphics
 import Foundation
+import ImageIO
 import SigmaMusicKit
 
 /// A canned session for looking at the UI without a network or a signed-in account:
@@ -18,10 +20,51 @@ enum Demo {
     }
 
     static let tracks: [Track] = [
-        Track(id: "demo:1", title: "夜风与小小的表", artist: "示例歌手", album: "示例专辑", durationMs: 42_000),
-        Track(id: "demo:2", title: "Hold the Beat", artist: "Sample Band", album: "Demo", tag: "VIP", durationMs: 38_000),
+        Track(id: "demo:1", title: "夜风与小小的表", artist: "示例歌手", album: "示例专辑", durationMs: 42_000, cover: picture("night", 0.62, 0.25)),
+        Track(id: "demo:2", title: "Hold the Beat", artist: "Sample Band", album: "Demo", tag: "VIP", durationMs: 38_000, cover: picture("beat", 0.05, 0.12)),
         Track(id: "demo:3", title: "没有歌词的曲子", artist: "示例乐队", durationMs: 30_000),
     ]
+
+    static let avatar = picture("avatar", 0.35, 0.1)
+
+    /// What the lyrics page says when QQ Music was asked for word timing and had nothing like this song.
+    static let missedQQ = QQReport(.belowThreshold(best: "夜风 - 示例歌手", score: 0.41))
+
+    static let networkSteps = [
+        NetworkCheck.Step(name: "网易云接口", millis: 420),
+        NetworkCheck.Step(name: "网易云取播放地址", millis: 610),
+        NetworkCheck.Step(name: "音频服务器（首 1KB）", millis: 1_850),
+        NetworkCheck.Step(name: "QQ 音乐搜索", millis: nil, detail: "网络超时，请重试"),
+        NetworkCheck.Step(name: "封面图片服务器", millis: 190),
+    ]
+
+    /// A generated gradient picture in the temporary folder, as a `file:` URL: covers and avatars load the
+    /// way they do from NetEase, but without a network.
+    private static func picture(_ name: String, _ hue: Double, _ shift: Double) -> String? {
+        let side = 160
+        guard let context = CGContext(
+            data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        func color(_ h: Double) -> CGColor {
+            let r = 0.5 + 0.5 * sin(2 * Double.pi * (h + 0.00))
+            let g = 0.5 + 0.5 * sin(2 * Double.pi * (h + 0.33))
+            let b = 0.5 + 0.5 * sin(2 * Double.pi * (h + 0.66))
+            return CGColor(red: r, green: g, blue: b, alpha: 1)
+        }
+        let colors = [color(hue), color(hue + shift + 0.2)] as CFArray
+        guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) else {
+            return nil
+        }
+        context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: side, y: side), options: [])
+        guard let image = context.makeImage() else { return nil }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("sigma-demo-\(name).png")
+        guard let destination = CGImageDestinationCreateWithURL(file as CFURL, "public.png" as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        return CGImageDestinationFinalize(destination) ? file.absoluteString : nil
+    }
 
     static let lyrics: Lyrics = {
         var lines: [Lyrics.Line] = []

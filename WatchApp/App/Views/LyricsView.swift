@@ -14,18 +14,36 @@ struct LyricsView: View {
                 if snapshot.lyrics.hasLines {
                     VStack(spacing: 4) {
                         lines(snapshot, player: player)
-                        Text(Self.sourceLabel(snapshot))
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
+                        footer(snapshot)
                     }
                 } else {
-                    Reason(why: snapshot.why)
+                    Reason(snapshot: snapshot) { app.retryLyrics() }
                 }
             } else {
                 ProgressView()
             }
         }
         .padding(.horizontal, 4)
+    }
+
+    /// Where the lyrics came from and, when QQ Music's word timing was looked for and not found, why not
+    /// (tap to ask again).
+    @ViewBuilder
+    private func footer(_ snapshot: LyricsService.Snapshot) -> some View {
+        VStack(spacing: 2) {
+            Text(Self.sourceLabel(snapshot))
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+            if snapshot.done, snapshot.provider != .qq, let qq = snapshot.qq, !qq.matched {
+                Button { app.retryLyrics() } label: {
+                    Text(qq.summary + " · 点按重试")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     /// Redrawn 15 times a second while playing for the word sweep, twice a second otherwise (a seek while
@@ -56,23 +74,37 @@ struct LyricsView: View {
 }
 
 private struct Reason: View {
-    let why: LyricsService.Why
+    let snapshot: LyricsService.Snapshot
+    let retry: () -> Void
 
     var body: some View {
         VStack(spacing: 6) {
-            switch why {
+            switch snapshot.why {
             case .searching:
                 ProgressView()
                 Text("正在找歌词…")
             case .none:
                 Image(systemName: "text.badge.xmark")
-                Text("没有找到歌词")
+                if let failure = snapshot.failure {
+                    Text("歌词没取到：\(failure)")
+                    Button("重试", action: retry)
+                } else {
+                    Text("没有找到歌词")
+                    if let qq = snapshot.qq, !qq.matched {
+                        Text(qq.summary).font(.system(size: 10))
+                        Button("重试", action: retry)
+                    }
+                }
             case .instrumental:
                 Image(systemName: "music.note")
                 Text("纯音乐，请欣赏")
             case .noWordTiming:
                 Image(systemName: "text.alignleft")
                 Text("这首歌没有逐词歌词")
+                if let qq = snapshot.qq, !qq.matched {
+                    Text(qq.summary).font(.system(size: 10))
+                    Button("重试", action: retry)
+                }
             }
         }
         .font(.caption)

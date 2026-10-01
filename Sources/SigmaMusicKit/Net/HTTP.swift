@@ -79,10 +79,39 @@ public final class URLSessionTransport: HTTPTransport, Sendable {
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        // A watch wakes its radio (or the phone's link) on demand: wait for that instead of failing at once.
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForResource = 60
         self.session = URLSession(configuration: configuration)
     }
 
+    /// Tries each request twice: a connection that was just being woken, dropped or timed out usually
+    /// works the second time, and a failure costs the person a wait and a tap.
+    static let attempts = 2
+
+    private static let transient: Set<URLError.Code> = [
+        .timedOut, .networkConnectionLost, .cannotConnectToHost, .dnsLookupFailed, .cannotFindHost,
+    ]
+
     public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        var attempt = 1
+        while true {
+            do {
+                let response = try await sendOnce(request)
+                if attempt < Self.attempts, [502, 503, 504].contains(response.status), response.body.isEmpty {
+                    attempt += 1
+                    try await Task.sleep(for: .milliseconds(500))
+                    continue
+                }
+                return response
+            } catch let error as URLError where attempt < Self.attempts && Self.transient.contains(error.code) {
+                attempt += 1
+                try await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    private func sendOnce(_ request: HTTPRequest) async throws -> HTTPResponse {
         var urlRequest = URLRequest(
             url: request.url,
             cachePolicy: .reloadIgnoringLocalCacheData,

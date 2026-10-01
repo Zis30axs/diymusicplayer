@@ -59,6 +59,28 @@ public actor LyricsService {
         public let done: Bool
         /// When `lyrics` has no lines: still looking, none found, an instrumental, or only line-timed in word mode.
         public let why: Why
+        /// How the look for QQ Music's word-timed lyrics went; `nil` when QQ was not (or is not yet) asked.
+        public let qq: QQReport?
+        /// Why NetEase's own lookup failed (the network, a refusal); `nil` when it did not.
+        public let failure: String?
+
+        public init(
+            lyrics: Lyrics,
+            raw: Lyrics,
+            provider: Provider?,
+            done: Bool,
+            why: Why,
+            qq: QQReport? = nil,
+            failure: String? = nil
+        ) {
+            self.lyrics = lyrics
+            self.raw = raw
+            self.provider = provider
+            self.done = done
+            self.why = why
+            self.qq = qq
+            self.failure = failure
+        }
 
         public static let empty = Snapshot(lyrics: .none, raw: .none, provider: nil, done: true, why: .none)
     }
@@ -68,6 +90,11 @@ public actor LyricsService {
         var provider: Provider?
         var done = false
         var task: Task<Void, Never>?
+        var qq: QQReport?
+        var failure: String?
+        // NetEase's translation and romanization, kept so a later QQ lookup can still fill the gaps.
+        var translation: Lyrics?
+        var romanization: Lyrics?
     }
 
     public private(set) var channel: Channel
@@ -77,11 +104,13 @@ public actor LyricsService {
     private let netease: NeteaseApi?
     private let qq: QQMusicApi
     private let cacheSize: Int
+    private let qqRetryDelay: Duration
     private var cache: [String: Slot] = [:]
     private var recency: [String] = []  // least recently used first
     private var generation = 0
     private var watchers: [String: [UUID: AsyncStream<Snapshot>.Continuation]] = [:]
     private var fixedLyrics: Lyrics?
+    private var fixedQQ: QQReport?
 
     /// - Parameter netease: `nil` when there is no online source (offline previews): every track has none.
     public init(
@@ -90,7 +119,8 @@ public actor LyricsService {
         language: Language = .translation,
         netease: NeteaseApi? = nil,
         qq: QQMusicApi = QQMusicApi(),
-        cacheSize: Int = 64
+        cacheSize: Int = 64,
+        qqRetryDelay: Duration = .milliseconds(800)
     ) {
         self.channel = channel
         self.mode = mode
@@ -98,6 +128,7 @@ public actor LyricsService {
         self.netease = netease
         self.qq = qq
         self.cacheSize = max(1, cacheSize)
+        self.qqRetryDelay = qqRetryDelay
     }
 
     /// Looks every track's lyrics up again from `channel`.
@@ -130,9 +161,11 @@ public actor LyricsService {
         publishAll()
     }
 
-    /// Every track gets these lyrics (previews and tests); `nil` goes back to looking them up.
-    public func setOverride(_ lyrics: Lyrics?) {
+    /// Every track gets these lyrics (previews and tests), with `qq` as the account of the QQ lookup;
+    /// `nil` goes back to looking them up.
+    public func setOverride(_ lyrics: Lyrics?, qq: QQReport? = nil) {
         fixedLyrics = lyrics
+        fixedQQ = lyrics == nil ? nil : qq
         publishAll()
     }
 
@@ -149,7 +182,8 @@ public actor LyricsService {
                 raw: fixedLyrics,
                 provider: nil,
                 done: true,
-                why: Self.why(raw: fixedLyrics, done: true, mode: mode)
+                why: Self.why(raw: fixedLyrics, done: true, mode: mode),
+                qq: fixedQQ
             )
         }
         guard let slot = slot(for: track) else { return .empty }
@@ -185,7 +219,9 @@ public actor LyricsService {
             raw: slot.raw,
             provider: slot.provider,
             done: slot.done,
-            why: Self.why(raw: slot.raw, done: slot.done, mode: mode)
+            why: Self.why(raw: slot.raw, done: slot.done, mode: mode),
+            qq: slot.qq,
+            failure: slot.failure
         )
     }
 
@@ -247,8 +283,10 @@ public actor LyricsService {
 
         do {
             if channel == .qq {
-                if let qrc = await fromQQ(track), current() {
-                    found(track.id, qrc, .qq)
+                let result = await lookupQQ(track)
+                if current() {
+                    if let qrc = result.lyrics { found(track.id, qrc, .qq) }
+                    cache[track.id]?.qq = result.report
                 }
                 finish(track.id, generation: generation)
                 return
@@ -259,6 +297,8 @@ public actor LyricsService {
             guard current() else { return }
             let translation = LyricsParser.lrc(texts.translation)
             let romanization = LyricsParser.lrc(texts.romanization)
+            cache[track.id]?.translation = translation
+            cache[track.id]?.romanization = romanization
 
             let yrc = LyricsParser.yrc(texts.yrc)
             if yrc.kind == .word {
@@ -276,12 +316,21 @@ public actor LyricsService {
                 return
             }
 
-            if channel == .mix, let qrc = await fromQQ(track), current() {
-                // QQ's own translation first; NetEase's fills any line QQ left without one.
-                found(track.id, LyricsParser.attach(qrc, translation: translation, romanization: romanization), .qq)
+            if channel == .mix {
+                let result = await lookupQQ(track)
+                if current() {
+                    if let qrc = result.lyrics {
+                        // QQ's own translation first; NetEase's fills any line QQ left without one.
+                        found(track.id, LyricsParser.attach(qrc, translation: translation, romanization: romanization), .qq)
+                    }
+                    cache[track.id]?.qq = result.report
+                }
             }
         } catch {
-            // No lyrics for this track (offline, rejected, malformed): shown as "none".
+            // No lyrics for this track (offline, rejected, malformed): shown as "none", with the reason.
+            if !Self.isCancellation(error), current() {
+                cache[track.id]?.failure = userMessage(for: error)
+            }
         }
         finish(track.id, generation: generation)
     }
@@ -300,25 +349,169 @@ public actor LyricsService {
         publish(trackId)
     }
 
-    /// QQ Music's word-timed lyrics for `track`, or `nil` (no match, no QRC, or any failure).
-    private func fromQQ(_ track: Track) async -> Lyrics? {
-        do {
-            let artist = track.artist.components(separatedBy: " / ").first ?? track.artist
-            let candidates = try await qq.search(track.title + " " + artist, limit: 8).map(\.candidate)
-            guard let match = QQMusicMatcher.match(
-                candidates,
-                title: track.title,
-                artist: artist,
-                durationMs: track.durationMs
-            ) else { return nil }
-            guard let found = try await qq.fetchLyrics(songId: match.track.songId), let qrc = found.qrc else { return nil }
-            let lyrics = LyricsParser.qrc(qrc)
-            guard lyrics.kind == .word else { return nil }
-            let translation = found.translation.map { LyricsParser.lrc($0) }
-            let romanization = found.romanization.map { LyricsParser.qrc($0) }
-            return LyricsParser.attach(lyrics, translation: translation, romanization: romanization)
-        } catch {
-            return nil
+    /// Tries again for `track` after a failure or a miss. When NetEase itself failed the whole lookup starts
+    /// over; when only QQ Music's word-timed lyrics were missed, the line-timed lyrics already on show stay
+    /// until QQ has better. The next `updates(for:)` follows it.
+    public func retry(for track: Track?) {
+        guard let track, fixedLyrics == nil, let slot = cache[track.id], slot.done else { return }
+
+        if slot.failure != nil {
+            cache[track.id] = nil
+            recency.removeAll { $0 == track.id }
+            _ = self.slot(for: track)
+            return
+        }
+
+        guard channel != .netease, let report = slot.qq, !report.matched else { return }
+        let generation = self.generation
+        cache[track.id]?.done = false
+        cache[track.id]?.qq = nil
+        cache[track.id]?.task = Task { [weak self] in
+            await self?.askQQAgain(track, generation: generation)
+        }
+        touch(track.id)
+        publish(track.id)
+    }
+
+    private func askQQAgain(_ track: Track, generation: Int) async {
+        let result = await Self.lookupQQ(track, qq: qq, retryDelay: qqRetryDelay)
+        if generation == self.generation, let slot = cache[track.id] {
+            if let qrc = result.lyrics {
+                found(
+                    track.id,
+                    LyricsParser.attach(qrc, translation: slot.translation, romanization: slot.romanization),
+                    .qq
+                )
+            }
+            cache[track.id]?.qq = result.report
+        }
+        finish(track.id, generation: generation)
+    }
+
+    private func lookupQQ(_ track: Track) async -> QQLookup {
+        await Self.lookupQQ(track, qq: qq, retryDelay: qqRetryDelay)
+    }
+
+    private struct QQLookup: Sendable {
+        let lyrics: Lyrics?
+        let report: QQReport
+    }
+
+    /// QQ Music's word-timed lyrics for `track` and how the look went. The search is the original's
+    /// ("title artist"), then, if that has no usable answer, the title without its brackets and the title
+    /// alone (QQ's search is picky about extra words); each request is tried twice. Of the songs that look
+    /// like this one, the best three are asked for lyrics in turn (QQ lists a single, an album track and a
+    /// live take as separate songs, and not every copy has word timing).
+    private nonisolated static func lookupQQ(_ track: Track, qq: QQMusicApi, retryDelay: Duration) async -> QQLookup {
+        let artist = track.artist.components(separatedBy: " / ").first ?? track.artist
+        let deadline = ContinuousClock.now + .seconds(60)
+
+        var pool: [QQMusicMatcher.Candidate] = []
+        var seen = Set<Int64>()
+        var asked = Set<Int64>()
+        var searchFailure: (any Error)?
+        var lyricsFailure: (any Error)?
+        var withoutWordTiming: String?
+
+        func cancelled() -> QQLookup { QQLookup(lyrics: nil, report: QQReport(.failed("已取消"))) }
+
+        for (index, query) in qqQueries(title: track.title, artist: artist).enumerated() {
+            if ContinuousClock.now >= deadline { break }
+            do {
+                let results = try await retrying(until: deadline, delay: retryDelay) {
+                    try await qq.search(query.text, limit: query.limit)
+                }
+                for result in results where seen.insert(result.songId).inserted {
+                    // The broader searches also turn up other people's songs with the same name.
+                    if index > 0, QQMusicMatcher.artistScore(artist, result.artist) < 0.5 { continue }
+                    pool.append(result.candidate)
+                }
+            } catch {
+                if isCancellation(error) { return cancelled() }
+                searchFailure = error
+                continue
+            }
+
+            let ranked = QQMusicMatcher.ranked(pool, title: track.title, artist: artist, durationMs: track.durationMs)
+            for match in ranked.prefix(3) where asked.insert(match.track.songId).inserted {
+                do {
+                    let found = try await retrying(until: deadline, delay: retryDelay) {
+                        try await qq.fetchLyrics(songId: match.track.songId)
+                    }
+                    if let lyrics = wordTimed(found) {
+                        return QQLookup(lyrics: lyrics, report: QQReport(.matched))
+                    }
+                    withoutWordTiming = withoutWordTiming ?? label(match.track)
+                } catch {
+                    if isCancellation(error) { return cancelled() }
+                    lyricsFailure = error
+                }
+            }
+        }
+
+        if let lyricsFailure {
+            return QQLookup(lyrics: nil, report: QQReport(.failed(userMessage(for: lyricsFailure))))
+        }
+        if let withoutWordTiming {
+            return QQLookup(lyrics: nil, report: QQReport(.noWordTiming(best: withoutWordTiming)))
+        }
+        if let searchFailure {
+            return QQLookup(lyrics: nil, report: QQReport(.failed(userMessage(for: searchFailure))))
+        }
+        guard let closest = QQMusicMatcher.closest(pool, title: track.title, artist: artist, durationMs: track.durationMs) else {
+            return QQLookup(lyrics: nil, report: QQReport(.noResults))
+        }
+        return QQLookup(
+            lyrics: nil,
+            report: QQReport(.belowThreshold(best: label(closest.track), score: closest.score))
+        )
+    }
+
+    /// The searches to try, in order: what the original asks, the title without brackets, the title alone.
+    nonisolated static func qqQueries(title: String, artist: String) -> [(text: String, limit: Int)] {
+        let plain = title
+            .replacingOccurrences(of: "[\\(（\\[【].*?[\\)）\\]】]", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var queries: [(text: String, limit: Int)] = [(title + " " + artist, 8)]
+        if !plain.isEmpty, plain != title { queries.append((plain + " " + artist, 8)) }
+        queries.append((plain.isEmpty ? title : plain, 12))
+        var seen = Set<String>()
+        return queries.filter { seen.insert($0.text.trimmingCharacters(in: .whitespaces)).inserted }
+    }
+
+    private nonisolated static func wordTimed(_ found: QQMusicApi.QQLyrics?) -> Lyrics? {
+        guard let found, let qrc = found.qrc else { return nil }
+        let lyrics = LyricsParser.qrc(qrc)
+        guard lyrics.kind == .word else { return nil }
+        let translation = found.translation.map { LyricsParser.lrc($0) }
+        let romanization = found.romanization.map { LyricsParser.qrc($0) }
+        return LyricsParser.attach(lyrics, translation: translation, romanization: romanization)
+    }
+
+    private nonisolated static func label(_ track: QQMusicMatcher.Candidate) -> String {
+        track.artist.isEmpty ? track.name : track.name + " - " + track.artist
+    }
+
+    private nonisolated static func isCancellation(_ error: any Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled
+    }
+
+    /// Runs `operation`, and once more after `delay` if it fails (unless that would pass `deadline`).
+    private nonisolated static func retrying<T>(
+        until deadline: ContinuousClock.Instant,
+        delay: Duration,
+        attempts: Int = 2,
+        _ operation: () async throws -> T
+    ) async throws -> T {
+        var attempt = 1
+        while true {
+            do {
+                return try await operation()
+            } catch {
+                if isCancellation(error) || attempt >= attempts || ContinuousClock.now >= deadline { throw error }
+                attempt += 1
+                try await Task.sleep(for: delay)
+            }
         }
     }
 

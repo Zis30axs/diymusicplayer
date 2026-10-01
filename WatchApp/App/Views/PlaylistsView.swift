@@ -29,9 +29,12 @@ struct PlaylistsView: View {
                 } else {
                     List(playlists, id: \.id) { playlist in
                         NavigationLink(value: Route.playlist(id: playlist.id, name: playlist.name)) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(playlist.name).lineLimit(1)
-                                Text("\(playlist.trackCount) 首").font(.caption2).foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                Artwork(url: playlist.cover, side: 34, symbol: "music.note.list")
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(playlist.name).lineLimit(1)
+                                    Text("\(playlist.trackCount) 首").font(.caption2).foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }

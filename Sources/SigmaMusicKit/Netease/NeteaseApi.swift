@@ -190,6 +190,18 @@ public struct NeteaseApi: Sendable {
         return secure + (secure.contains("?") ? "&" : "?") + "param=256y256"
     }
 
+    /// A NetEase image (cover or avatar) over https at `side`×`side` pixels; a local file's URL is left alone.
+    public static func imageURL(_ url: String, side: Int) -> URL? {
+        guard url.hasPrefix("http") else { return URL(string: url) }
+        let secure = url.hasPrefix("http://") ? "https://" + String(url.dropFirst(7)) : url
+        let size = "param=\(side)y\(side)"
+        if let range = secure.range(of: "([?&])param=\\d+y\\d+", options: .regularExpression) {
+            let separator = secure[range].first.map(String.init) ?? "?"
+            return URL(string: secure.replacingCharacters(in: range, with: separator + size))
+        }
+        return URL(string: secure + (secure.contains("?") ? "&" : "?") + size)
+    }
+
     public static func songId(of track: Track) throws -> Int64 {
         guard track.id.hasPrefix(trackPrefix), let id = Int64(track.id.dropFirst(trackPrefix.count)) else {
             throw MusicServiceError.invalidTrack(track.id)
@@ -205,12 +217,19 @@ public struct NeteaseApi: Sendable {
 
     // MARK: Streams
 
+    /// How much to ask for: `high` is 320k when the song has it (a lot to pull through a watch's link),
+    /// `standard` 128k.
+    public enum StreamQuality: String, Sendable, CaseIterable {
+        case standard
+        case high
+    }
+
     /// Where to stream `songId` from; `nil` when nothing playable came back.
-    public func stream(songId: Int64) async throws -> NeteaseStream? {
+    public func stream(songId: Int64, quality: StreamQuality = .high) async throws -> NeteaseStream? {
         var lastError: (any Error)?
 
         // eapi: 320k when free, a 30 s preview of paid songs; MP3 only.
-        for level in ["exhigh", "standard"] {
+        for level in quality == .high ? ["exhigh", "standard"] : ["standard"] {
             do {
                 let params: JSON = [
                     "ids": .string("[\(songId)]"),

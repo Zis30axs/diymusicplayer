@@ -64,7 +64,8 @@ struct TrackRows: View {
             Button {
                 app.playAndShow(source, start: row.id)
             } label: {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    Artwork(url: track.cover, side: 34)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(track.title)
                             .lineLimit(1)

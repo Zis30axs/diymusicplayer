@@ -16,7 +16,7 @@ public actor NeteaseSession {
         + "(KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36 Edg/127.0.0.0"
     static let desktopUserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 "
         + "(KHTML, like Gecko) Safari/537.36 Chrome/91.0.4472.164 NeteaseMusicDesktop/" + appVersion
-    public static let timeout: TimeInterval = 10
+    public static let timeout: TimeInterval = 15
 
     static let cookieFile = "netease_cookie.dat"
     static let deviceFile = "netease_device.json"

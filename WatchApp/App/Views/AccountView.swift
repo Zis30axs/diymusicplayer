@@ -16,12 +16,13 @@ struct AccountView: View {
                     signedIn(account)
                 case .waiting, .scanned:
                     if let text = state.qrText {
-                        QRView(text: text)
                         if state.phase == .scanned {
+                            Artwork(url: state.scannerAvatar, side: 64, symbol: "person.fill", round: true)
                             Text("已扫码\(state.scanner.map { "：\($0)" } ?? "")，请在手机上确认")
                                 .font(.caption2)
                                 .multilineTextAlignment(.center)
                         } else {
+                            QRView(text: text)
                             Text("用网易云音乐 App 扫一扫").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
@@ -43,9 +44,7 @@ struct AccountView: View {
 
     @ViewBuilder
     private func signedIn(_ account: NeteaseAccount) -> some View {
-        Image(systemName: "person.crop.circle.fill")
-            .font(.system(size: 36))
-            .foregroundStyle(.tint)
+        Artwork(url: account.profile?.avatarUrl, side: 64, symbol: "person.fill", round: true)
         if let profile = account.profile {
             Text(profile.nickname).font(.headline).lineLimit(1)
             Text(profile.vip ? "VIP 会员" : "非 VIP")
