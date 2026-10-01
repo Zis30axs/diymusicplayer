@@ -10,6 +10,8 @@ public enum MusicServiceError: Error, Equatable, Sendable {
     case rejected(code: Int)
     /// A track id that does not belong to the service asked.
     case invalidTrack(String)
+    /// There is no online source (the offline preview).
+    case offline
 }
 
 public struct HTTPRequest: Sendable {

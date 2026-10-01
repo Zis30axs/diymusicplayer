@@ -30,6 +30,8 @@ public actor NeteaseSession {
     private let deviceId: String
     private let clientSign: String
     private var cookies: [String: String]
+    /// Changes whenever the login does, so per-account lists can be fetched again.
+    public private(set) var generation = 0
 
     public init(store: any SessionStore, transport: any HTTPTransport = URLSessionTransport()) {
         self.store = store
@@ -56,6 +58,7 @@ public actor NeteaseSession {
         }
         guard isLoggedIn else { return false }
         saveCookies()
+        generation += 1
         return true
     }
 
@@ -70,6 +73,7 @@ public actor NeteaseSession {
             cookies[name] = nil
         }
         store.remove(Self.cookieFile)
+        generation += 1
     }
 
     // MARK: Requests

@@ -121,6 +121,10 @@ public struct NeteaseApi: Sendable {
     }
 
     /// Full song records (covers, VIP flags, lengths) for `ids`, in their order.
+    public func tracks(ids: [Int64]) async throws -> [Track] {
+        try await songDetails(ids)
+    }
+
     private func songDetails(_ ids: [Int64]) async throws -> [Track] {
         var out: [Track] = []
         var from = 0

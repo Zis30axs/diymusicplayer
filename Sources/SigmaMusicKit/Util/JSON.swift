@@ -68,6 +68,15 @@ public enum JSON: Sendable, Equatable {
         return Int(exactly: value)
     }
 
+    /// A JSON number (not a numeric string).
+    public var number: Double? {
+        switch self {
+        case .int(let value): return Double(value)
+        case .double(let value): return value
+        default: return nil
+        }
+    }
+
     public var bool: Bool? {
         switch self {
         case .bool(let value):
