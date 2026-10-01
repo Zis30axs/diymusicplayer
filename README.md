@@ -15,7 +15,7 @@ The implementation follows the M0-M7 porting plan. The first code milestone is t
 - [x] M1 lyric core + parity tests
 - [x] M2 crypto and service APIs (NetEase weapi/eapi, QQ QRC decrypt, `sigma-cli`; stream URLs still to be confirmed from a mainland network, see below)
 - [x] M3 lyric service + queue (`LyricsService` lookup/cache, `MusicPlayer`, `MusicLibrary`)
-- [ ] M4 watch playback
+- [x] M4 watch playback (`PlayerEngine` on AVPlayer, headphone background audio, Now Playing / remote commands, minimal `WatchApp`; on-watch check still to do, see WatchApp/README.md)
 - [ ] M5 watch UI
 - [ ] M6 QR login
 - [ ] M7 settings and polish
