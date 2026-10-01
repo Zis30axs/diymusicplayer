@@ -7,8 +7,8 @@ import Foundation
 /// lists are keyed by the sign-in generation, so a different login fetches its own. With no online source
 /// (the offline preview) there is nothing to browse and every call throws `MusicServiceError.offline`.
 public actor MusicLibrary {
-    public let netease: NeteaseApi?
-    public let lyrics: LyricsService
+    public nonisolated let netease: NeteaseApi?
+    public nonisolated let lyrics: LyricsService
     private var cache: [String: Task<ListSource, any Error>] = [:]
 
     public init(netease: NeteaseApi?, qq: QQMusicApi = QQMusicApi()) {
