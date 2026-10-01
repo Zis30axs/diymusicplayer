@@ -41,6 +41,8 @@ enum CLI {
                 return await smoke(services, rest)
             case "probe":
                 return await probe(services, rest)
+            case "probe-qq":
+                return await probeQQ(rest)
             default:
                 print(usage)
                 return 2
@@ -304,6 +306,53 @@ enum CLI {
             } catch {
                 print("\(name): \(describe(error))")
             }
+        }
+        return 0
+    }
+
+    /// QQ search endpoints compared: the legacy one answers 500 from some networks.
+    static func probeQQ(_ args: [String]) async -> Int32 {
+        let keyword = args.first ?? "Beyond 海阔天空"
+        let unreserved = CharacterSet.alphanumerics
+        let encoded = keyword.addingPercentEncoding(withAllowedCharacters: unreserved) ?? keyword
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        let transport = URLSessionTransport()
+
+        func show(_ name: String, _ request: HTTPRequest, limit: Int = 700) async {
+            do {
+                let response = try await transport.send(request)
+                let text = String(response.text.prefix(limit)).replacingOccurrences(of: "\n", with: " ")
+                print("\(name): status=\(response.status) bytes=\(response.body.count) body=\(text)")
+            } catch {
+                print("\(name): \(describe(error))")
+            }
+        }
+
+        let legacy = "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?ct=24&qqmusic_ver=1298&new_json=1&remoteplace=txt.yqq.song"
+            + "&searchid=1&t=0&aggr=1&cr=1&catZhida=1&lossless=0&flag_qc=0&p=1&n=3&w=\(encoded)"
+            + "&g_tk=5381&loginUin=0&hostUin=0&format=json&inCharset=utf8&outCharset=utf-8&notice=0&platform=yqq&needNewCode=0"
+        if let url = URL(string: legacy) {
+            await show("legacy+params", HTTPRequest(url: url, headers: ["User-Agent": ua, "Referer": "https://y.qq.com/"], timeout: 8))
+        }
+
+        let body = """
+        {"comm":{"ct":19,"cv":1859,"uin":0},"req":{"method":"DoSearchForQQMusicDesktop","module":"music.search.SearchCgiService",\
+        "param":{"grp":1,"num_per_page":3,"page_num":1,"query":"\(keyword)","search_type":0}}}
+        """
+        if let url = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg") {
+            await show("musicu POST", HTTPRequest(
+                url: url,
+                method: "POST",
+                headers: ["User-Agent": ua, "Referer": "https://y.qq.com/", "Content-Type": "application/json"],
+                body: Data(body.utf8),
+                timeout: 8
+            ), limit: 1500)
+        }
+        if let url = URL(string: "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=\(body.addingPercentEncoding(withAllowedCharacters: unreserved) ?? "")") {
+            await show("musicu GET", HTTPRequest(url: url, headers: ["User-Agent": ua, "Referer": "https://y.qq.com/"], timeout: 8), limit: 400)
+        }
+        if let url = URL(string: "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg?key=\(encoded)&format=json") {
+            await show("smartbox", HTTPRequest(url: url, headers: ["User-Agent": ua, "Referer": "https://y.qq.com/"], timeout: 8), limit: 1500)
         }
         return 0
     }
