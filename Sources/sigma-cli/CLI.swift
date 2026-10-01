@@ -9,9 +9,10 @@ enum CLI {
 
       search <keyword> [limit]    NetEase search
       url <songId>                NetEase stream URL (host only)
-      lyrics <songId> [--show]    NetEase lyrics summary (--show prints the text)
+      lyrics <songId> [--channel mix|qq|netease] [--show]
+                                  Which service's lyrics win for a NetEase song (--show prints the text)
       qq <keyword> [limit]        QQ Music search
-      mix <keyword> [--show]      NetEase track + QQ word-timed lyrics, end to end
+      mix <keyword> [--show]      Search NetEase, then `lyrics` for the first hit in the mixed channel
       smoke [keyword]             Every service call once; exits 1 if any step fails
       probe [keyword]             Raw status/size of the calls that can fail by region (debugging)
 
@@ -81,20 +82,43 @@ enum CLI {
 
     static func lyrics(_ services: Services, _ args: [String]) async throws -> Int32 {
         guard let id = args.first.flatMap({ Int64($0) }) else { print(usage); return 2 }
-        let show = args.contains("--show")
-        let texts = try await services.netease.lyrics(songId: id)
-        let yrc = LyricsParser.yrc(texts.yrc)
-        let lrc = LyricsParser.lrc(texts.lrc)
-        print("instrumental=\(texts.instrumental)")
-        print("yrc: kind=\(yrc.kind) lines=\(yrc.lines.count)")
-        print("lrc: kind=\(lrc.kind) lines=\(lrc.lines.count)")
-        print("translation: \(texts.translation.isEmpty ? "none" : "present")  romanization: \(texts.romanization.isEmpty ? "none" : "present")")
+        guard let track = try await services.netease.tracks(ids: [id]).first else {
+            print("no such song")
+            return 1
+        }
+        let channel = option(args, "--channel").flatMap(LyricsService.Channel.init(rawValue:)) ?? .mix
+        return await report(services, track: track, channel: channel, show: args.contains("--show"))
+    }
+
+    /// Looks the lyrics up through `LyricsService` and prints which service won, like the Java client's log line.
+    static func report(_ services: Services, track: Track, channel: LyricsService.Channel, show: Bool) async -> Int32 {
+        let snapshot = await lookup(services, track: track, channel: channel)
+        let provider = snapshot.provider.map { "\($0)".uppercased() } ?? "none"
+        print("Sigma lyrics: '\(track.title)' - \(provider) (\(snapshot.raw.kind), \(channel.rawValue))")
+        let translated = snapshot.raw.lines.filter { $0.translation != nil }.count
+        let romanized = snapshot.raw.lines.filter { $0.romanization != nil }.count
+        print("lines=\(snapshot.raw.lines.count) translated=\(translated) romanized=\(romanized) why=\(snapshot.why)")
         if show {
-            for line in (yrc.hasLines ? yrc : lrc).lines {
-                print("[\(clock(line.startMs))] \(line.text)")
+            for line in snapshot.raw.lines {
+                let words = line.words.isEmpty ? "" : "  (\(line.words.count) words)"
+                print("[\(clock(line.startMs))] \(line.text)\(words)")
             }
         }
-        return 0
+        return snapshot.raw.hasLines ? 0 : 1
+    }
+
+    static func lookup(_ services: Services, track: Track, channel: LyricsService.Channel) async -> LyricsService.Snapshot {
+        let service = LyricsService(channel: channel, netease: services.netease, qq: services.qq)
+        var last = LyricsService.Snapshot.empty
+        for await snapshot in await service.updates(for: track) {
+            last = snapshot
+        }
+        return last
+    }
+
+    static func option(_ args: [String], _ name: String) -> String? {
+        guard let index = args.firstIndex(of: name), args.indices.contains(index + 1) else { return nil }
+        return args[index + 1]
     }
 
     static func qq(_ services: Services, _ args: [String]) async throws -> Int32 {
@@ -110,64 +134,12 @@ enum CLI {
 
     static func mix(_ services: Services, _ args: [String]) async throws -> Int32 {
         guard let keyword = args.first else { print(usage); return 2 }
-        let report = try await mixReport(services, keyword: keyword)
-        print(report.summary)
-        if args.contains("--show"), let lyrics = report.best {
-            for line in lyrics.lines {
-                let words = line.words.isEmpty ? "" : "  (\(line.words.count) words)"
-                print("[\(clock(line.startMs))] \(line.text)\(words)")
-            }
+        guard let track = try await services.netease.search(keyword, limit: 5).first else {
+            print("no NetEase result")
+            return 1
         }
-        return report.best?.kind == .word ? 0 : 1
-    }
-
-    // MARK: Mix pipeline (what LyricsService will do in M3)
-
-    struct MixReport {
-        var track: Track?
-        var netease: Lyrics = .none
-        var qqMatch: String?
-        var qq: Lyrics = .none
-        var best: Lyrics? { qq.kind == .word ? qq : (netease.hasLines ? netease : nil) }
-
-        var summary: String {
-            guard let track else { return "no NetEase result" }
-            var lines = ["track: \(track.id) \(track.title) - \(track.artist)"]
-            lines.append("netease: kind=\(netease.kind) lines=\(netease.lines.count)")
-            lines.append("qq match: \(qqMatch ?? "none")")
-            lines.append("qq: kind=\(qq.kind) lines=\(qq.lines.count)")
-            return lines.joined(separator: "\n")
-        }
-    }
-
-    static func mixReport(_ services: Services, keyword: String) async throws -> MixReport {
-        var report = MixReport()
-        guard let track = try await services.netease.search(keyword, limit: 5).first else { return report }
-        report.track = track
-        let songId = try NeteaseApi.songId(of: track)
-
-        let texts = try await services.netease.lyrics(songId: songId)
-        let yrc = LyricsParser.yrc(texts.yrc)
-        report.netease = yrc.hasLines ? yrc : LyricsParser.lrc(texts.lrc)
-
-        let candidates = try await services.qq.search(track.title + " " + track.artist, limit: 10).map(\.candidate)
-        guard let match = QQMusicMatcher.match(
-            candidates,
-            title: track.title,
-            artist: track.artist,
-            durationMs: track.durationMs
-        ) else { return report }
-        report.qqMatch = "\(match.track.songId) score=\(String(format: "%.2f", match.score))"
-
-        if let lyrics = try await services.qq.fetchLyrics(songId: match.track.songId) {
-            let base = LyricsParser.qrc(lyrics.qrc)
-            report.qq = LyricsParser.attach(
-                base,
-                translation: LyricsParser.lrc(lyrics.translation ?? texts.translation),
-                romanization: LyricsParser.qrc(lyrics.romanization)
-            )
-        }
-        return report
+        print("track: \(track.id) \(track.title) - \(track.artist)")
+        return await report(services, track: track, channel: .mix, show: args.contains("--show"))
     }
 
     // MARK: Smoke test
@@ -237,10 +209,16 @@ enum CLI {
             }
         }
 
-        await step("mix pipeline") {
-            let report = try await mixReport(services, keyword: keyword)
-            guard report.qq.kind == .word else { throw SmokeError("no QQ word-timed lyrics\n" + report.summary) }
-            return "netease=\(report.netease.kind) qq=\(report.qq.kind) lines=\(report.qq.lines.count)"
+        if let track {
+            await step("lyrics service (mix)") {
+                let snapshot = await lookup(services, track: track, channel: .mix)
+                guard snapshot.raw.hasLines else { throw SmokeError("no lyrics (why=\(snapshot.why))") }
+                guard snapshot.provider == .qq, snapshot.raw.kind == .word else {
+                    throw SmokeError("expected QQ word-timed lyrics, got \(String(describing: snapshot.provider)) \(snapshot.raw.kind)")
+                }
+                let translated = snapshot.raw.lines.filter { $0.translation != nil }.count
+                return "QQ word-timed lines=\(snapshot.raw.lines.count) translated=\(translated)"
+            }
         }
 
         print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
