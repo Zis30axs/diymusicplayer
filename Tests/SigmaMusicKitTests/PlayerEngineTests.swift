@@ -322,7 +322,11 @@ struct NeteaseResolverTests {
     }
 
     @Test func noStreamMeansNothingToPlay() async throws {
-        let api = api { _, _ in MockTransport.json(#"{"code":200,"data":[{"url":null,"type":"mp3","br":0}]}"#) }
+        let api = api { request, _ in
+            request.method == "HEAD"
+                ? HTTPResponse(status: 302, headers: ["location": "https://music.163.com/404"])
+                : MockTransport.json(#"{"code":200,"data":[{"url":null,"type":"mp3","br":0}]}"#)
+        }
         let track = Track(id: "netease:1", title: "x")
         #expect(try await PlayerEngine.neteaseResolver(api)(track) == nil)
     }

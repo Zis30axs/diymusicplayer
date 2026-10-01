@@ -1,0 +1,55 @@
+name: Watch app build
+
+on:
+  pull_request:
+    paths:
+      - "WatchApp/**"
+      - "Sources/SigmaMusicKit/**"
+      - "Package.swift"
+      - ".github/workflows/watch-app-build.yml"
+  push:
+    branches:
+      - main
+      - "port/**"
+    paths:
+      - "WatchApp/**"
+      - "Sources/SigmaMusicKit/**"
+      - "Package.swift"
+      - ".github/workflows/watch-app-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i watch || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: WatchApp
+        run: xcodegen generate
+
+      - name: Build watchOS simulator app
+        working-directory: WatchApp
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project SigmaWatch.xcodeproj \
+            -scheme SigmaWatch \
+            -configuration Debug \
+            -sdk watchsimulator \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/build.log" | tail -40
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "::notice title=xcodebuild errors::$(grep -E 'error:' "$RUNNER_TEMP/build.log" | head -20 | sed 's/%/%25/g' | tr '\n' '|')"
+          echo "::notice title=xcodebuild result::$(grep -E 'BUILD (SUCCEEDED|FAILED)' "$RUNNER_TEMP/build.log" | tail -1)"
