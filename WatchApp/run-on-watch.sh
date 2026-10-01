@@ -28,21 +28,30 @@ if [ -z "$DEVICE" ]; then
   exit 1
 fi
 
-# Signing team: $DEVELOPMENT_TEAM, else WatchApp/.team (gitignored, one team id), else the team set in a local
-# WatchProbe/project.yml (DEVELOPMENT_TEAM: XXXXXXXXXX). Without one, xcodebuild cannot sign for the watch.
+# Signing team: $DEVELOPMENT_TEAM, else WatchApp/.team (gitignored, one team id), else the team a local
+# WatchProbe build already used (WatchProbe/project.yml or its generated project), else the team of the
+# "Apple Development" certificate in the login keychain (its OU). Without one, xcodebuild cannot sign.
 TEAM="${DEVELOPMENT_TEAM:-}"
 if [ -z "$TEAM" ] && [ -f .team ]; then
   TEAM=$(tr -d '[:space:]' < .team)
 fi
-if [ -z "$TEAM" ] && [ -f ../WatchProbe/project.yml ]; then
-  TEAM=$(grep -E '^[[:space:]]*DEVELOPMENT_TEAM:' ../WatchProbe/project.yml | head -1 | sed -E 's/.*DEVELOPMENT_TEAM:[[:space:]]*"?([A-Z0-9]+)"?.*/\1/')
+if [ -z "$TEAM" ]; then
+  for f in ../WatchProbe/project.yml ../WatchProbe/WatchProbe.xcodeproj/project.pbxproj; do
+    [ -f "$f" ] || continue
+    TEAM=$(grep -E 'DEVELOPMENT_TEAM' "$f" | grep -Eo '[A-Z0-9]{10}' | head -1)
+    [ -n "$TEAM" ] && break
+  done
+fi
+if [ -z "$TEAM" ]; then
+  TEAM=$(security find-certificate -c "Apple Development" -p 2>/dev/null | openssl x509 -noout -subject 2>/dev/null \
+    | sed -n 's/.*OU *= *\([A-Z0-9]\{10\}\).*/\1/p' | head -1)
 fi
 TEAM_ARG=""
 if [ -n "$TEAM" ]; then
   TEAM_ARG="DEVELOPMENT_TEAM=$TEAM"
   echo "== Signing team $TEAM"
 else
-  echo "== No signing team found: set DEVELOPMENT_TEAM=<id> or put it in WatchApp/.team (Xcode > Settings > Accounts shows it)"
+  echo "== No signing team found: set DEVELOPMENT_TEAM=<id> or put it in WatchApp/.team"
 fi
 
 BUNDLE_ID="com.zis30axs.diymusicplayer.watch"
