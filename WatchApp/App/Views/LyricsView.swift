@@ -34,12 +34,14 @@ struct LyricsView: View {
             Text(Self.sourceLabel(snapshot))
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
-            if snapshot.done, snapshot.provider != .qq, let qq = snapshot.qq, !qq.matched {
+            if Self.explainsQQ(snapshot), let qq = snapshot.qq {
                 Button { app.retryLyrics() } label: {
                     Text(qq.summary + " · 点按重试")
                         .font(.system(size: 9))
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .buttonStyle(.plain)
             }
@@ -50,15 +52,29 @@ struct LyricsView: View {
     /// paused still shows), once a second on the always-on display.
     @ViewBuilder
     private func lines(_ snapshot: LyricsService.Snapshot, player: MusicPlayer) -> some View {
+        // The QQ account under the lyrics takes room: show fewer lines.
+        let compact = Self.explainsQQ(snapshot)
         if player.isPlaying && !dimmed {
             TimelineView(.animation(minimumInterval: 1.0 / 15)) { _ in
-                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs - Int64(app.lyricDelayMs), sweeping: true)
+                LyricLines(
+                    lyrics: snapshot.lyrics, position: player.positionMs - Int64(app.lyricDelayMs),
+                    sweeping: true, compact: compact
+                )
             }
         } else {
             TimelineView(.periodic(from: .now, by: dimmed ? 1 : 0.5)) { _ in
-                LyricLines(lyrics: snapshot.lyrics, position: player.positionMs - Int64(app.lyricDelayMs), sweeping: !dimmed)
+                LyricLines(
+                    lyrics: snapshot.lyrics, position: player.positionMs - Int64(app.lyricDelayMs),
+                    sweeping: !dimmed, compact: compact
+                )
             }
         }
+    }
+
+    /// QQ Music was asked for word timing, did not give it, and there is something to say about why.
+    static func explainsQQ(_ snapshot: LyricsService.Snapshot) -> Bool {
+        guard snapshot.done, snapshot.provider != .qq, let qq = snapshot.qq else { return false }
+        return !qq.matched
     }
 
     static func sourceLabel(_ snapshot: LyricsService.Snapshot) -> String {
@@ -117,16 +133,17 @@ private struct LyricLines: View {
     let lyrics: Lyrics
     let position: Int64
     let sweeping: Bool
+    var compact = false
 
     var body: some View {
         let index = lyrics.index(at: position) ?? -1
         let hasTranslation = lyrics.lines.indices.contains(index) && lyrics.lines[index].translation != nil
         VStack(spacing: 5) {
-            side(index - 1, past: true)
+            if !compact { side(index - 1, past: true) }
             current(index)
             side(index + 1, past: false)
             // The screen is small: a translation takes the place of the second upcoming line.
-            if !hasTranslation { side(index + 2, past: false) }
+            if !hasTranslation, !compact { side(index + 2, past: false) }
         }
         .frame(maxWidth: .infinity)
         .animation(.easeInOut(duration: 0.25), value: index)

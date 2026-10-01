@@ -8,6 +8,7 @@ struct SettingsView: View {
 
     var body: some View {
         @Bindable var settings = app
+        ScrollViewReader { proxy in
         List {
             Section("歌词") {
                 Picker("来源", selection: $settings.lyricChannel) {
@@ -63,6 +64,7 @@ struct SettingsView: View {
                     }
                 }
                 .disabled(checking || app.netease == nil)
+                .id("network")
                 ForEach(steps) { step in
                     VStack(alignment: .leading, spacing: 1) {
                         HStack {
@@ -78,6 +80,10 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+        .onAppear {
+            if Demo.screen == "settings-net" { proxy.scrollTo("network", anchor: .top) }
+        }
         }
         .navigationTitle("设置")
     }
