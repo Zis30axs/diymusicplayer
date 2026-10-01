@@ -295,7 +295,7 @@ enum CLI {
         let transport = URLSessionTransport()
         for (name, address, extra) in variants {
             guard let url = URL(string: address) else { continue }
-            var headers = ["User-Agent": QQMusicApi.userAgent]
+            var headers = ["User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"]
             headers.merge(extra) { _, new in new }
             do {
                 let response = try await transport.send(HTTPRequest(url: url, headers: headers, timeout: 8))
