@@ -1,5 +1,23 @@
 import Foundation
 
+/// Parses the three lyric formats the player meets (a port of `LyricsParser.java`):
+///
+/// - LRC (NetEase `lrc`): `[mm:ss.xx]text`, also `[mm:ss]`, three-digit fractions, several time tags on one
+///   line and `[offset:±ms]`;
+/// - YRC (NetEase, from `/api/song/lyric/v1`): `[lineStart,lineDur](wordStart,wordDur,0)word...`, each
+///   word's timing before it;
+/// - QRC (QQ Music, decrypted): `[lineStart,lineDur]word(wordStart,wordDur)...`, each timing after its
+///   word, usually wrapped in XML as `LyricContent="..."`.
+///
+/// NetEase's credit lines are JSON (`{"t":0,"c":[{"tx":"作曲: "},...]}`) and become plain lines. Parsers
+/// never throw: they return what they could read.
+///
+/// The details follow Java on purpose, because the original reads some lyrics this port must read too:
+/// lines split at `\n` only (a stray `\r`, U+2028 or U+0085 stays in its line), `String.trim` strips just
+/// the characters up to U+0020 (not no-break or ideographic spaces), digits are ASCII, an LRC/QRC offset
+/// is applied at the end to every line wherever the tag stands, and the XML wrapper's value ends at the
+/// quote before the last `/>`. Positions are UTF-16 offsets into an `NSString`, never `String.Index`
+/// (a tag followed by a combining mark is not on a `Character` boundary).
 public enum LyricsParser {
     private static let lineTailMs: Int64 = 4_000
     public static let matchMs: Int64 = 1_200
@@ -11,185 +29,196 @@ public enum LyricsParser {
         let words: [Lyrics.Word]
     }
 
+    private nonisolated(unsafe) static let lrcTime = regex(#"\[([0-9]{1,3}):([0-9]{1,2})(?:[.:]([0-9]{1,3}))?\]"#)
+    private nonisolated(unsafe) static let offsetTag = regex(#"^\[offset:\s*([+-]?[0-9]+)\s*\]"#, [.caseInsensitive])
+    private nonisolated(unsafe) static let metaTag = regex(#"^\[[a-zA-Z#]+:.*\]\s*$"#)
+    private nonisolated(unsafe) static let lineHeader = regex(#"^\[([0-9]+),([0-9]+)\]"#)
+    private nonisolated(unsafe) static let yrcWord = regex(#"\(([0-9]+),([0-9]+)(?:,-?[0-9]+)?\)([^(]*)"#)
+    private nonisolated(unsafe) static let qrcWord = regex(#"(.*?)\(([0-9]+),([0-9]+)\)"#)
+
+    private static func regex(_ pattern: String, _ options: NSRegularExpression.Options = []) -> NSRegularExpression {
+        // The patterns are constants; one that does not compile is a programming error.
+        // swiftlint:disable:next force_try
+        try! NSRegularExpression(pattern: pattern, options: options)
+    }
+
+    // MARK: LRC
+
     public static func lrc(_ text: String?) -> Lyrics {
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .none
-        }
+        guard let text else { return .none }
 
         var offset: Int64 = 0
         var raw: [Raw] = []
 
-        for sourceLine in text.components(separatedBy: .newlines) {
-            let line = sourceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        for sourceLine in lines(of: text) {
+            let line = trim(sourceLine)
             if line.isEmpty { continue }
+            let ns = line as NSString
+            let whole = NSRange(location: 0, length: ns.length)
 
-            if let value = firstCapture(in: line, pattern: #"^\[offset:\s*([+-]?\d+)\s*\]"#, options: [.caseInsensitive]),
-               let parsed = Int64(value) {
+            if let tag = offsetTag.firstMatch(in: line, range: whole),
+               let parsed = Int64(ns.substring(with: tag.range(at: 1))) {
                 offset = parsed
                 continue
             }
 
-            if line.hasPrefix("{"), let credit = credit(line) {
-                raw.append(credit)
+            if startsWithBrace(line) {
+                if let credit = credit(line) { raw.append(credit) }
                 continue
             }
 
-            let matches = captures(in: line, pattern: #"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]"#)
-            guard !matches.isEmpty else { continue }
-
-            var expectedLocation = 0
             var starts: [Int64] = []
-            var contentStart: String.Index?
-
-            for match in matches {
-                guard match.range.location == expectedLocation,
-                      match.groups.count >= 2,
-                      let minute = Int64(match.groups[0]),
-                      let second = Int64(match.groups[1]) else { break }
-
+            var end = 0
+            for match in lrcTime.matches(in: line, range: whole) {
+                guard match.range.location == end,
+                      let minute = Int64(ns.substring(with: match.range(at: 1))),
+                      let second = Int64(ns.substring(with: match.range(at: 2))) else { break }
                 var ms = minute * 60_000 + second * 1_000
-                if match.groups.count > 2, !match.groups[2].isEmpty, let fraction = Int64(match.groups[2]) {
-                    switch match.groups[2].count {
-                    case 1: ms += fraction * 100
-                    case 2: ms += fraction * 10
-                    default: ms += fraction
+                let fractionRange = match.range(at: 3)
+                if fractionRange.location != NSNotFound {
+                    let digits = ns.substring(with: fractionRange)
+                    if let fraction = Int64(digits) {
+                        switch digits.utf16.count {
+                        case 1: ms += fraction * 100
+                        case 2: ms += fraction * 10
+                        default: ms += fraction
+                        }
                     }
                 }
-
                 starts.append(ms)
-                expectedLocation = match.range.location + match.range.length
-                if let index = line.utf16Index(offset: expectedLocation) {
-                    contentStart = index
-                }
+                end = NSMaxRange(match.range)
             }
-
-            guard !starts.isEmpty, let contentStart else { continue }
-            let content = String(line[contentStart...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !content.isEmpty else { continue }
+            if starts.isEmpty { continue }
+            let content = trim(ns.substring(from: end))
+            if content.isEmpty { continue }
             for start in starts {
-                raw.append(Raw(start: max(0, start - offset), end: nil, text: content, words: []))
+                raw.append(Raw(start: start, end: nil, text: content, words: []))
             }
         }
 
-        return build(kind: .line, raw: raw)
+        // An LRC offset is added to the displayed time: positive shows lines earlier.
+        let shift = -offset
+        return build(kind: .line, raw: raw.map {
+            Raw(start: max(0, $0.start + shift), end: $0.end, text: $0.text, words: $0.words)
+        })
     }
 
+    // MARK: YRC
+
     public static func yrc(_ text: String?) -> Lyrics {
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .none
-        }
+        guard let text else { return .none }
 
         var raw: [Raw] = []
         var foundWords = false
 
-        for sourceLine in text.components(separatedBy: .newlines) {
-            let line = sourceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        for sourceLine in lines(of: text) {
+            let line = trim(sourceLine)
             if line.isEmpty { continue }
 
-            if line.hasPrefix("{"), let credit = credit(line) {
-                raw.append(credit)
+            if startsWithBrace(line) {
+                if let credit = credit(line) { raw.append(credit) }
                 continue
             }
 
-            guard let header = captures(in: line, pattern: #"^\[(\d+),(\d+)\]"#).first,
-                  header.groups.count == 2,
-                  let lineStart = Int64(header.groups[0]),
-                  let lineDuration = Int64(header.groups[1]) else { continue }
+            let ns = line as NSString
+            guard let header = lineHeader.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
+                  let lineStart = Int64(ns.substring(with: header.range(at: 1))),
+                  let lineDuration = Int64(ns.substring(with: header.range(at: 2))) else { continue }
 
-            let bodyOffset = header.range.location + header.range.length
-            guard let bodyIndex = line.utf16Index(offset: bodyOffset) else { continue }
-            let body = String(line[bodyIndex...])
-
-            let wordMatches = captures(in: body, pattern: #"\((\d+),(\d+)(?:,-?\d+)?\)([^\(]*)"#)
+            let body = ns.substring(from: NSMaxRange(header.range))
+            let bodyNS = body as NSString
             var words: [Lyrics.Word] = []
-            for match in wordMatches where match.groups.count == 3 {
-                guard let start = Int64(match.groups[0]),
-                      let duration = Int64(match.groups[1]) else { continue }
-                let word = match.groups[2]
-                if !word.isEmpty {
-                    words.append(.init(startMs: start, durationMs: duration, text: word))
-                }
+            for match in yrcWord.matches(in: body, range: NSRange(location: 0, length: bodyNS.length)) {
+                let word = bodyNS.substring(with: match.range(at: 3))
+                guard !word.isEmpty,
+                      let start = Int64(bodyNS.substring(with: match.range(at: 1))),
+                      let duration = Int64(bodyNS.substring(with: match.range(at: 2))) else { continue }
+                words.append(.init(startMs: start, durationMs: duration, text: word))
             }
 
             guard !words.isEmpty else { continue }
             foundWords = true
-            raw.append(Raw(
-                start: lineStart,
-                end: lineStart + lineDuration,
-                text: words.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines),
-                words: words
-            ))
+            raw.append(Raw(start: lineStart, end: lineStart + lineDuration, text: joined(words), words: words))
         }
 
         return foundWords ? build(kind: .word, raw: raw) : .none
     }
 
+    // MARK: QRC
+
     public static func qrc(_ text: String?) -> Lyrics {
-        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .none
-        }
+        guard let text else { return .none }
 
         let body = unescapeXML(lyricContent(text))
         var raw: [Raw] = []
         var offset: Int64 = 0
         var foundWords = false
 
-        for sourceLine in body.components(separatedBy: .newlines) {
-            var line = sourceLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        for sourceLine in lines(of: body) {
+            var line = trim(sourceLine)
             if line.isEmpty { continue }
+            var ns = line as NSString
+            var whole = NSRange(location: 0, length: ns.length)
 
-            if let value = firstCapture(in: line, pattern: #"^\[offset:\s*([+-]?\d+)\s*\]"#, options: [.caseInsensitive]),
-               let parsed = Int64(value) {
+            if let tag = offsetTag.firstMatch(in: line, range: whole),
+               let parsed = Int64(ns.substring(with: tag.range(at: 1))) {
                 offset = parsed
                 continue
             }
-
-            if line.range(of: #"^\[[a-zA-Z#]+:.*\]\s*$"#, options: .regularExpression) != nil {
+            if let meta = metaTag.firstMatch(in: line, range: whole), meta.range.length == ns.length {
                 continue
             }
 
-            var lineStart: Int64?
-            var lineEnd: Int64?
-            if let header = captures(in: line, pattern: #"^\[(\d+),(\d+)\]"#).first,
-               header.groups.count == 2,
-               let start = Int64(header.groups[0]),
-               let duration = Int64(header.groups[1]) {
+            var lineStart: Int64 = -1
+            var lineEnd: Int64 = -1
+            if let header = lineHeader.firstMatch(in: line, range: whole),
+               let start = Int64(ns.substring(with: header.range(at: 1))),
+               let duration = Int64(ns.substring(with: header.range(at: 2))) {
                 lineStart = start
                 lineEnd = start + duration
-                let bodyOffset = header.range.location + header.range.length
-                if let index = line.utf16Index(offset: bodyOffset) {
-                    line = String(line[index...])
-                }
+                line = ns.substring(from: NSMaxRange(header.range))
+                ns = line as NSString
+                whole = NSRange(location: 0, length: ns.length)
             }
 
-            let wordMatches = captures(in: line, pattern: #"(.*?)\((\d+),(\d+)\)"#)
             var words: [Lyrics.Word] = []
-            for match in wordMatches where match.groups.count == 3 {
-                let word = match.groups[0]
+            for match in qrcWord.matches(in: line, range: whole) {
+                let word = ns.substring(with: match.range(at: 1))
                 guard !word.isEmpty,
-                      let start = Int64(match.groups[1]),
-                      let duration = Int64(match.groups[2]) else { continue }
-                words.append(.init(
-                    startMs: max(0, start - offset),
-                    durationMs: duration,
-                    text: word
-                ))
+                      let start = Int64(ns.substring(with: match.range(at: 2))),
+                      let duration = Int64(ns.substring(with: match.range(at: 3))) else { continue }
+                words.append(.init(startMs: start, durationMs: duration, text: word))
             }
 
             guard !words.isEmpty else { continue }
             foundWords = true
-            let start = max(0, (lineStart ?? words[0].startMs) - offset)
-            let end = lineEnd.map { max(0, $0 - offset) }
+            if lineStart < 0 { lineStart = words[0].startMs }
             raw.append(Raw(
-                start: start,
-                end: end,
-                text: words.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines),
+                start: lineStart,
+                end: lineEnd < 0 ? nil : lineEnd,
+                text: joined(words),
                 words: words
             ))
         }
 
-        return foundWords ? build(kind: .word, raw: raw) : .none
+        guard foundWords else { return .none }
+        let shift = -offset
+        if shift != 0 {
+            raw = raw.map { item in
+                Raw(
+                    start: max(0, item.start + shift),
+                    end: item.end.map { max(0, $0 + shift) },
+                    text: item.text,
+                    words: item.words.map {
+                        Lyrics.Word(startMs: max(0, $0.startMs + shift), durationMs: $0.durationMs, text: $0.text)
+                    }
+                )
+            }
+        }
+        return build(kind: .word, raw: raw)
     }
+
+    // MARK: Translations
 
     public static func attach(
         _ base: Lyrics,
@@ -251,7 +280,12 @@ public enum LyricsParser {
     }
 
     private static func build(kind: Lyrics.Kind, raw: [Raw]) -> Lyrics {
-        let sorted = raw.sorted { $0.start < $1.start }
+        // Java sorts stably; so the ties keep their order here too.
+        let sorted = raw.enumerated()
+            .sorted { lhs, rhs in
+                lhs.element.start != rhs.element.start ? lhs.element.start < rhs.element.start : lhs.offset < rhs.offset
+            }
+            .map(\.element)
         let lines = sorted.enumerated().map { index, item -> Lyrics.Line in
             let next = index + 1 < sorted.count ? sorted[index + 1].start : Int64.max
             let own: Int64
@@ -272,79 +306,106 @@ public enum LyricsParser {
         return lines.isEmpty ? .none : Lyrics(kind: kind, lines: lines)
     }
 
-    private static func credit(_ line: String) -> Raw? {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let time = object["t"] as? NSNumber,
-              let components = object["c"] as? [[String: Any]] else {
-            return nil
-        }
-        let text = components.compactMap { $0["tx"] as? String }
-            .joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        return Raw(start: time.int64Value, end: nil, text: text, words: [])
+    // MARK: Helpers
+
+    /// Java's `text.split("\\r?\\n")`: only `\n` ends a line (the `\r` before it is trimmed away with the rest).
+    private static func lines(of text: String) -> [String] {
+        text.utf8.split(separator: 0x0A, omittingEmptySubsequences: false)
+            .map { String(decoding: $0, as: UTF8.self) }
     }
 
+    /// Java's `String.trim()`: removes every character up to U+0020, and nothing else.
+    static func trim(_ text: String) -> String {
+        let scalars = text.unicodeScalars
+        guard let first = scalars.firstIndex(where: { $0.value > 0x20 }),
+              let last = scalars.lastIndex(where: { $0.value > 0x20 }) else { return "" }
+        return String(scalars[first...last])
+    }
+
+    /// `line.startsWith("{")` (not `hasPrefix`, which compares whole `Character`s: `{` + a combining mark is not `{`).
+    private static func startsWithBrace(_ line: String) -> Bool {
+        line.utf8.first == 0x7B
+    }
+
+    private static func joined(_ words: [Lyrics.Word]) -> String {
+        trim(words.map(\.text).joined())
+    }
+
+    /// A NetEase credit line: `{"t":ms,"c":[{"tx":"..."},...]}`, read as Gson does (numbers and numeric
+    /// strings both give the time; any part that is not text drops the whole line).
+    private static func credit(_ line: String) -> Raw? {
+        guard let json = try? JSON.parse(line),
+              let object = json.object,
+              let time = object["t"],
+              let parts = object["c"]?.array,
+              let start = milliseconds(time) else { return nil }
+        var text = ""
+        for part in parts {
+            guard let tx = part.object?["tx"] else { continue }
+            guard let piece = plainText(tx) else { return nil }
+            text += piece
+        }
+        let content = trim(text)
+        return content.isEmpty ? nil : Raw(start: start, end: nil, text: content, words: [])
+    }
+
+    /// Gson's `getAsLong`: a number truncates, a string must be a whole number.
+    private static func milliseconds(_ value: JSON) -> Int64? {
+        switch value {
+        case .int(let number): return number
+        case .double(let number):
+            guard number.isFinite, abs(number) < 9.0e18 else { return nil }
+            return Int64(number)
+        case .string(let text): return Int64(text)
+        default: return nil
+        }
+    }
+
+    /// Gson's `getAsString` on a primitive.
+    private static func plainText(_ value: JSON) -> String? {
+        switch value {
+        case .string(let text): return text
+        case .int(let number): return String(number)
+        case .double(let number): return number.isFinite ? "\(number)" : nil
+        case .bool(let flag): return flag ? "true" : "false"
+        default: return nil
+        }
+    }
+
+    /// The `LyricContent` attribute's value when the QRC is wrapped in XML, else the text itself.
+    /// The value ends at the quote before the last `/>` (a quote inside a lyric does not end it).
     private static func lyricContent(_ text: String) -> String {
-        guard let marker = text.range(of: "LyricContent=\"") else { return text }
-        let start = marker.upperBound
-        let prefix = String(text[start...])
-        if let close = prefix.range(of: "\"/>", options: .backwards) {
-            return String(prefix[..<close.lowerBound])
+        let ns = text as NSString
+        let marker = ns.range(of: "LyricContent=\"", options: .literal)
+        guard marker.location != NSNotFound else { return text }
+        let start = NSMaxRange(marker)
+
+        var quote = NSNotFound
+        let close = ns.range(of: "/>", options: [.literal, .backwards])
+        if close.location != NSNotFound {
+            quote = ns.range(
+                of: "\"",
+                options: [.literal, .backwards],
+                range: NSRange(location: 0, length: close.location)
+            ).location
         }
-        if let quote = prefix.firstIndex(of: "\"") {
-            return String(prefix[..<quote])
+        if quote == NSNotFound || quote <= start {
+            quote = ns.range(
+                of: "\"",
+                options: .literal,
+                range: NSRange(location: start, length: ns.length - start)
+            ).location
         }
-        return prefix
+        return quote == NSNotFound
+            ? ns.substring(from: start)
+            : ns.substring(with: NSRange(location: start, length: quote - start))
     }
 
     private static func unescapeXML(_ text: String) -> String {
-        text.replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&apos;", with: "'")
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&amp;", with: "&")
-    }
-
-    private struct RegexCapture {
-        let range: NSRange
-        let groups: [String]
-    }
-
-    private static func captures(
-        in text: String,
-        pattern: String,
-        options: NSRegularExpression.Options = []
-    ) -> [RegexCapture] {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else { return [] }
-        let full = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.matches(in: text, range: full).map { match in
-            let groups = (1..<match.numberOfRanges).map { index -> String in
-                let range = match.range(at: index)
-                guard range.location != NSNotFound, let swiftRange = Range(range, in: text) else { return "" }
-                return String(text[swiftRange])
-            }
-            return RegexCapture(range: match.range, groups: groups)
-        }
-    }
-
-    private static func firstCapture(
-        in text: String,
-        pattern: String,
-        options: NSRegularExpression.Options = []
-    ) -> String? {
-        captures(in: text, pattern: pattern, options: options).first?.groups.first
-    }
-}
-
-private extension String {
-    func utf16Index(offset: Int) -> String.Index? {
-        guard offset >= 0,
-              let utf16Index = utf16.index(utf16.startIndex, offsetBy: offset, limitedBy: utf16.endIndex),
-              let index = String.Index(utf16Index, within: self) else {
-            return nil
-        }
-        return index
+        text.replacingOccurrences(of: "&quot;", with: "\"", options: .literal)
+            .replacingOccurrences(of: "&apos;", with: "'", options: .literal)
+            .replacingOccurrences(of: "&lt;", with: "<", options: .literal)
+            .replacingOccurrences(of: "&gt;", with: ">", options: .literal)
+            .replacingOccurrences(of: "&amp;", with: "&", options: .literal)
     }
 }

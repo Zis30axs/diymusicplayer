@@ -19,8 +19,14 @@ public enum JSON: Sendable, Equatable {
 
     // MARK: Parsing
 
+    /// Strict JSON first; if that refuses, the lenient reading Gson gives the original (see `LenientJSON`).
     public static func parse(_ data: Data) throws -> JSON {
-        try JSONDecoder().decode(JSON.self, from: data)
+        do {
+            return try JSONDecoder().decode(JSON.self, from: data)
+        } catch {
+            if let lenient = try? LenientJSON.parse(data) { return lenient }
+            throw error
+        }
     }
 
     public static func parse(_ text: String) throws -> JSON {

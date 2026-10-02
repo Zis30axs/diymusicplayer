@@ -103,6 +103,7 @@ public actor LyricsService {
 
     private let netease: NeteaseApi?
     private let qq: QQMusicApi
+    private let store: LyricsStore?
     private let cacheSize: Int
     private let qqRetryDelay: Duration
     private var cache: [String: Slot] = [:]
@@ -112,14 +113,18 @@ public actor LyricsService {
     private var fixedLyrics: Lyrics?
     private var fixedQQ: QQReport?
 
-    /// - Parameter netease: `nil` when there is no online source (offline previews): every track has none.
+    /// - Parameters:
+    ///   - netease: `nil` when there is no online source (offline previews): every track has none.
+    ///   - store: where answers are kept between launches (`nil`: only in memory, for this launch).
+    ///   - cacheSize: how many tracks' lookups stay in memory (the watch has the room for plenty).
     public init(
         channel: Channel = .mix,
         mode: Mode = .auto,
         language: Language = .translation,
         netease: NeteaseApi? = nil,
         qq: QQMusicApi = QQMusicApi(),
-        cacheSize: Int = 64,
+        store: LyricsStore? = nil,
+        cacheSize: Int = 256,
         qqRetryDelay: Duration = .milliseconds(800)
     ) {
         self.channel = channel
@@ -127,6 +132,7 @@ public actor LyricsService {
         self.language = language
         self.netease = netease
         self.qq = qq
+        self.store = store
         self.cacheSize = max(1, cacheSize)
         self.qqRetryDelay = qqRetryDelay
     }
@@ -147,6 +153,27 @@ public actor LyricsService {
             }
         }
         watchers.removeAll()
+    }
+
+    /// Forgets what is held in memory (what is kept on disk stays); the next ask looks again.
+    public func clearMemory() {
+        generation += 1
+        for slot in cache.values {
+            slot.task?.cancel()
+        }
+        cache.removeAll()
+        recency.removeAll()
+        for continuations in watchers.values {
+            for continuation in continuations.values {
+                continuation.finish()
+            }
+        }
+        watchers.removeAll()
+    }
+
+    /// Opens the connection to QQ Music ahead of the first lookup.
+    public func warmUp() async {
+        await qq.warmUp()
     }
 
     public func setMode(_ mode: Mode) {
@@ -249,11 +276,17 @@ public actor LyricsService {
             return existing
         }
 
-        var slot = Slot()
         let channel = self.channel
         let generation = self.generation
-        slot.task = Task { [weak self] in
-            await self?.resolve(track, channel: channel, generation: generation)
+        var slot: Slot
+        if let kept = warmSlot(for: track, channel: channel) {
+            // Everything was kept from an earlier look: lyrics at once, and no network at all.
+            slot = kept
+        } else {
+            slot = Slot()
+            slot.task = Task { [weak self] in
+                await self?.resolve(track, channel: channel, generation: generation)
+            }
         }
         cache[track.id] = slot
         recency.append(track.id)
@@ -267,6 +300,15 @@ public actor LyricsService {
             watchers[evicted] = nil
         }
         return slot
+    }
+
+    /// Starts the lookups for `tracks` (the songs queued after the one playing) so their lyrics are ready
+    /// when they begin. Tracks already known cost nothing.
+    public func prefetch(_ tracks: [Track]) {
+        guard fixedLyrics == nil else { return }
+        for track in tracks {
+            _ = slot(for: track)
+        }
     }
 
     private func touch(_ trackId: String) {
@@ -293,7 +335,14 @@ public actor LyricsService {
             }
 
             guard let netease else { finish(track.id, generation: generation); return }
-            let texts = try await netease.lyrics(songId: NeteaseApi.songId(of: track))
+            let songId = try NeteaseApi.songId(of: track)
+            let texts: NeteaseLyricTexts
+            if let kept = store?.netease(songId: songId) {
+                texts = kept
+            } else {
+                texts = try await netease.lyrics(songId: songId)
+                store?.save(texts, songId: songId)
+            }
             guard current() else { return }
             let translation = LyricsParser.lrc(texts.translation)
             let romanization = LyricsParser.lrc(texts.romanization)
@@ -374,7 +423,7 @@ public actor LyricsService {
     }
 
     private func askQQAgain(_ track: Track, generation: Int) async {
-        let result = await Self.lookupQQ(track, qq: qq, retryDelay: qqRetryDelay)
+        let result = await lookupQQ(track, fresh: true)
         if generation == self.generation, let slot = cache[track.id] {
             if let qrc = result.lyrics {
                 found(
@@ -388,13 +437,88 @@ public actor LyricsService {
         finish(track.id, generation: generation)
     }
 
-    private func lookupQQ(_ track: Track) async -> QQLookup {
-        await Self.lookupQQ(track, qq: qq, retryDelay: qqRetryDelay)
+    /// QQ Music's lyrics for `track`: what an earlier look kept, else a look now (kept when it is worth keeping).
+    /// `fresh` skips what was kept (a retry the person asked for).
+    private func lookupQQ(_ track: Track, fresh: Bool = false) async -> QQLookup {
+        let songId = try? NeteaseApi.songId(of: track)
+        if let songId, let store {
+            if fresh {
+                store.forgetQQ(songId: songId)
+            } else if let record = store.qq(songId: songId), let kept = Self.lookup(from: record) {
+                return kept
+            }
+        }
+        let result = await Self.lookupQQ(track, qq: qq, retryDelay: qqRetryDelay)
+        if let songId, let record = LyricsStore.QQRecord(result) {
+            store?.save(record, songId: songId)
+        }
+        return result
     }
 
-    private struct QQLookup: Sendable {
+    struct QQLookup: Sendable {
         let lyrics: Lyrics?
         let report: QQReport
+        /// The texts QQ answered with when its lyrics were used (what the store keeps).
+        var source: QQMusicApi.QQLyrics?
+    }
+
+    /// A kept answer as a lookup; `nil` when it no longer reads as word-timed lyrics (the parser changed).
+    private nonisolated static func lookup(from record: LyricsStore.QQRecord) -> QQLookup? {
+        guard let report = record.report else { return nil }
+        if record.outcome == "matched" {
+            guard let lyrics = wordTimed(record.lyrics) else { return nil }
+            return QQLookup(lyrics: lyrics, report: report, source: record.lyrics)
+        }
+        return QQLookup(lyrics: nil, report: report)
+    }
+
+    /// The slot for a track whose lyrics were all kept from earlier (lyrics, then QQ's answer when the channel
+    /// asks for it); `nil` when anything is missing, which sends the lookup out to fetch it.
+    private func warmSlot(for track: Track, channel: Channel) -> Slot? {
+        guard let store, let songId = try? NeteaseApi.songId(of: track) else { return nil }
+        var slot = Slot()
+        slot.done = true
+
+        if channel == .qq {
+            guard let record = store.qq(songId: songId), let kept = Self.lookup(from: record) else { return nil }
+            if let qrc = kept.lyrics {
+                slot.raw = qrc
+                slot.provider = .qq
+            }
+            slot.qq = kept.report
+            return slot
+        }
+
+        guard let texts = store.netease(songId: songId) else { return nil }
+        let translation = LyricsParser.lrc(texts.translation)
+        let romanization = LyricsParser.lrc(texts.romanization)
+        slot.translation = translation
+        slot.romanization = romanization
+
+        let yrc = LyricsParser.yrc(texts.yrc)
+        if yrc.kind == .word {
+            slot.raw = LyricsParser.attach(yrc, translation: translation, romanization: romanization)
+            slot.provider = .netease
+            return slot
+        }
+        let lrc = LyricsParser.lrc(texts.lrc)
+        if lrc.hasLines {
+            slot.raw = LyricsParser.attach(lrc, translation: translation, romanization: romanization)
+            slot.provider = .netease
+        } else if texts.instrumental {
+            slot.raw = .instrumental
+            slot.provider = .netease
+            return slot
+        }
+        if channel == .netease { return slot }
+
+        guard let record = store.qq(songId: songId), let kept = Self.lookup(from: record) else { return nil }
+        if let qrc = kept.lyrics {
+            slot.raw = LyricsParser.attach(qrc, translation: translation, romanization: romanization)
+            slot.provider = .qq
+        }
+        slot.qq = kept.report
+        return slot
     }
 
     /// QQ Music's word-timed lyrics for `track` and how the look went. The search is the original's
@@ -439,7 +563,7 @@ public actor LyricsService {
                         try await qq.fetchLyrics(songId: match.track.songId)
                     }
                     if let lyrics = wordTimed(found) {
-                        return QQLookup(lyrics: lyrics, report: QQReport(.matched))
+                        return QQLookup(lyrics: lyrics, report: QQReport(.matched), source: found)
                     }
                     withoutWordTiming = withoutWordTiming ?? label(match.track)
                 } catch {

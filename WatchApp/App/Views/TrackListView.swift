@@ -31,6 +31,7 @@ struct TrackListView: View {
                     Text("没有内容").foregroundStyle(.secondary)
                 } else {
                     TrackRows(source: source)
+                        .task { app.prefetchCovers(of: Array(source.tracks.prefix(16))) }
                 }
             }
         }

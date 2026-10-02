@@ -31,14 +31,22 @@ struct MusicLibraryTests {
         #expect(transport.requests.count == 2)
     }
 
-    @Test func searchIsNotKept() async throws {
-        let (library, transport) = makeLibrary { _, _ in
+    @Test func searchIsKeptForAnHourThenAskedAgain() async throws {
+        let clock = TestClock()
+        let transport = MockTransport { _, _ in
             MockTransport.json(#"{"code":200,"result":{"songs":[{"id":9,"name":"Hit"}]}}"#)
         }
+        let session = NeteaseSession(store: MemorySessionStore(), transport: transport)
+        let library = MusicLibrary(netease: NeteaseApi(session: session), qq: QQMusicApi(transport: transport), clock: clock.now)
         let list = try await library.search("hit")
         #expect(list.name == "搜索 · hit")
-        _ = try await library.search("hit")
+        _ = try await library.search("  Hit ")  // the same words
+        #expect(transport.requests.count == 1)
+        _ = try await library.search("other")
         #expect(transport.requests.count == 2)
+        clock.advance(3_700)
+        _ = try await library.search("hit")
+        #expect(transport.requests.count == 3)
     }
 
     @Test func dailyListsAreKeyedByTheLogin() async throws {

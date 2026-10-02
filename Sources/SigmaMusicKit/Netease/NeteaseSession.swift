@@ -62,6 +62,13 @@ public actor NeteaseSession {
         return true
     }
 
+    /// A short fingerprint of the signed-in account (not reversible), to key what is kept per account;
+    /// `anonymous` when signed out.
+    public var accountKey: String {
+        guard let musicU = cookies["MUSIC_U"], !musicU.isEmpty else { return "anonymous" }
+        return DiskCache.fingerprint(musicU)
+    }
+
     /// The names (never the values) of the cookies held, for the log after a login.
     public var cookieNames: [String] {
         cookies.keys.sorted()
@@ -77,6 +84,14 @@ public actor NeteaseSession {
     }
 
     // MARK: Requests
+
+    /// Opens (and so warms) the connections to NetEase's API hosts; what comes back does not matter.
+    public func warmUp() async {
+        for host in [Self.eapiHost, Self.web] {
+            guard let url = URL(string: host + "/") else { continue }
+            _ = try? await transport.send(HTTPRequest(url: url, method: "HEAD", headers: ["User-Agent": Self.desktopUserAgent], timeout: 8))
+        }
+    }
 
     /// POSTs `data` to a `/weapi/...` path of the web API and parses the JSON reply.
     public func weapi(_ path: String, _ data: JSON = [:]) async throws -> JSON {
