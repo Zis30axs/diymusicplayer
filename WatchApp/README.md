@@ -77,4 +77,16 @@ xcrun simctl launch booted com.zis30axs.diymusicplayer.watch -sigma-demo -sigma-
 5. Lower your wrist while a song downloads: the transfer continues in the system (a background session) and the song
    is listed when you open the app again. If it is not, send what the 已下载 page shows.
 
+## On-watch check (M10: lyric parity and caches)
+
+1. Lyrics are now read the way the desktop original reads them (lenient JSON for QQ/NetEase replies, the same LRC /
+   YRC / QRC rules, checked against the Java code on 70+ cases). If a song still stays line-timed or has no lyrics,
+   send the orange line at the bottom of its lyrics page; on a Mac `swift run sigma-cli audit "<song artist>"` prints
+   what NetEase and QQ each return for it.
+2. What is kept on the watch: lyric texts (parsed again on each open, so parser fixes reach old songs), playlists and
+   search results (shown at once, refreshed in the background), covers, stream addresses (8 minutes) and the next
+   songs' lyrics, covers and address are fetched while the current one plays. Second plays and re-opened lists are
+   near instant, also with a poor connection.
+3. 设置 > 缓存 shows the size and clears it (downloaded songs are not touched).
+
 See REINSTALL.md for the 7-day reinstall routine of a free developer account.
