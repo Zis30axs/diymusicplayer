@@ -30,11 +30,16 @@ final class AppModel {
     @ObservationIgnored let downloader: URLSessionFileTransfer?
     /// `nil` in the demo (no network).
     @ObservationIgnored let netease: NeteaseApi?
+    /// What is kept on the watch between launches (lyrics, lists, pictures) and the picture store on top of it.
+    @ObservationIgnored let caches: Caches?
+    @ObservationIgnored let images: ImageStore
+    @ObservationIgnored let streams = StreamCache()
     let account: NeteaseAccount
     @ObservationIgnored private var nowPlaying: NowPlayingBridge?
     @ObservationIgnored private var monitorTask: Task<Void, Never>?
     @ObservationIgnored private var lyricsKey: LyricsKey?
     @ObservationIgnored private var lyricsTask: Task<Void, Never>?
+    @ObservationIgnored private var preparedFor: String?
 
     private struct LyricsKey: Equatable {
         var trackId: String?
@@ -119,6 +124,8 @@ final class AppModel {
     init() {
         if Demo.isOn {
             library = MusicLibrary(netease: nil)
+            caches = nil
+            images = ImageStore(disk: nil)
             netease = nil
             downloader = nil
             let demoDownloads = DownloadCenter(store: Demo.downloadStore(), source: Demo.downloadSource, transfer: DemoTransfer())
@@ -162,7 +169,11 @@ final class AppModel {
         )
         let session = NeteaseSession(store: store)
         let api = NeteaseApi(session: session)
-        library = MusicLibrary(netease: api)
+        // The watch has memory and storage to spare: keep what was fetched, so the second look is instant.
+        let kept = Caches.standard()
+        caches = kept
+        images = ImageStore(disk: kept.images)
+        library = MusicLibrary(netease: api, caches: kept)
         netease = api
         account = NeteaseAccount(session: session)
         let saved = DownloadStore.applicationSupport()
@@ -176,7 +187,7 @@ final class AppModel {
         // A saved song plays from its file (no network needed); anything else is streamed.
         let engine = PlayerEngine(resolver: PlayerEngine.downloadsFirst(
             saved,
-            fallback: PlayerEngine.neteaseResolver(api, quality: Self.storedAudioQuality)
+            fallback: PlayerEngine.neteaseResolver(api, quality: Self.storedAudioQuality, cache: streams)
         ))
         self.engine = engine
         player = MusicPlayer(backend: engine, source: ListSource(name: "", tracks: []))
@@ -184,7 +195,7 @@ final class AppModel {
 
         player.setVolume(1)  // the headphones and the crown own the loudness on the watch
         player.startAutoUpdate(every: .milliseconds(500))
-        let bridge = NowPlayingBridge(player: player)
+        let bridge = NowPlayingBridge(player: player, images: images)
         bridge.install()
         nowPlaying = bridge
         startMonitoring()
@@ -196,6 +207,9 @@ final class AppModel {
             await signedInAccount.restore()
             if signedInAccount.state.phase == .signedIn { await signedInAccount.loadProfile() }
         }
+        // Open the connections to NetEase and QQ now, so the first song does not pay for the handshakes.
+        let warming = library
+        Task(priority: .utility) { await warming.warmUp() }
     }
 
     /// A QR login just succeeded: a track that was only a preview plays in full now, and the account's name is fetched.
@@ -241,6 +255,7 @@ final class AppModel {
     private func syncLyrics() {
         let key = LyricsKey(trackId: player.current?.id, epoch: lyricsEpoch)
         guard key != lyricsKey else { return }
+        if key.trackId != lyricsKey?.trackId { prepareUpcoming() }
         lyricsKey = key
         lyricsTask?.cancel()
         lyrics = nil
@@ -252,6 +267,58 @@ final class AppModel {
                 self?.lyrics = next
             }
         }
+    }
+
+    /// The track just started: get what the next ones will need (their lyrics, covers and stream addresses) while
+    /// this one plays, so they start without the wait. Songs already saved on the watch need no stream.
+    private func prepareUpcoming() {
+        guard netease != nil, let current = player.current, preparedFor != current.id else { return }
+        preparedFor = current.id
+        let queue = player.queue
+        guard queue.count > 1 else { return }
+        let upcoming = (1...min(3, queue.count - 1)).map { queue[(player.index + $0) % queue.count] }
+        guard let next = upcoming.first else { return }
+
+        let service = library.lyrics
+        let ahead = Array(upcoming.prefix(2))
+        Task { await service.prefetch(ahead) }
+        images.prefetch(upcoming.flatMap { Self.coverURLs(of: $0) })
+        if let api = netease, downloads.state(of: next.id) != .downloaded {
+            let cache = streams
+            let quality = audioQuality
+            Task { await cache.prefetch(next, api: api, quality: quality) }
+        }
+    }
+
+    /// The sizes of a track's cover the player screen and the system's Now Playing ask for.
+    static func coverURLs(of track: Track) -> [URL] {
+        guard let cover = track.cover else { return [] }
+        return [140, 300].compactMap { NeteaseApi.imageURL(cover, side: $0) }
+    }
+
+    /// Starts fetching the covers a list is about to show.
+    func prefetchCovers(of tracks: [Track]) {
+        images.prefetch(tracks.compactMap { track in track.cover.flatMap { NeteaseApi.imageURL($0, side: 85) } })
+    }
+
+    // MARK: Cache
+
+    /// Bytes kept on disk, for the settings screen.
+    func cacheSize() async -> Int {
+        guard let caches else { return 0 }
+        return await Task.detached(priority: .utility) { caches.byteCount }.value
+    }
+
+    /// Forgets everything kept: lyrics, lists, pictures and stream addresses. Downloaded songs stay.
+    func clearCaches() async {
+        images.clearMemory()
+        DecodedImages.clear()
+        await streams.clear()
+        await library.clear()
+        let kept = caches
+        await Task.detached(priority: .utility) { kept?.clear() }.value
+        await library.lyrics.clearMemory()
+        lyricsEpoch += 1
     }
 
     /// `-sigma-screen <name>` on the command line opens that screen at launch (for screenshots).

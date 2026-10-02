@@ -13,6 +13,8 @@ enum CLI {
                                   Which service's lyrics win for a NetEase song (--show prints the text)
       qq <keyword> [limit]        QQ Music search
       mix <keyword> [--show]      Search NetEase, then `lyrics` for the first hit in the mixed channel
+      audit <keyword> [limit]     `lyrics` (mixed channel) for each of the first hits, one line each, with why QQ did or
+                                  did not give word timing: run it on songs the original reads and this port does not
       smoke [keyword]             Every service call once; exits 1 if any step fails
       probe [keyword]             Raw status/size of the calls that can fail by region (debugging)
 
@@ -38,6 +40,8 @@ enum CLI {
                 return try await qq(services, rest)
             case "mix":
                 return try await mix(services, rest)
+            case "audit":
+                return try await audit(services, rest)
             case "smoke":
                 return await smoke(services, rest)
             case "probe":
@@ -98,6 +102,8 @@ enum CLI {
         let translated = snapshot.raw.lines.filter { $0.translation != nil }.count
         let romanized = snapshot.raw.lines.filter { $0.romanization != nil }.count
         print("lines=\(snapshot.raw.lines.count) translated=\(translated) romanized=\(romanized) why=\(snapshot.why)")
+        if let qq = snapshot.qq { print("qq: \(qq.summary)") }
+        if let failure = snapshot.failure { print("netease: \(failure)") }
         if show {
             for line in snapshot.raw.lines {
                 let words = line.words.isEmpty ? "" : "  (\(line.words.count) words)"
@@ -140,6 +146,24 @@ enum CLI {
         }
         print("track: \(track.id) \(track.title) - \(track.artist)")
         return await report(services, track: track, channel: .mix, show: args.contains("--show"))
+    }
+
+    /// The mixed lookup for each of a search's first hits, one line apiece (titles only, never lyric text).
+    static func audit(_ services: Services, _ args: [String]) async throws -> Int32 {
+        guard let keyword = args.first else { print(usage); return 2 }
+        let limit = args.dropFirst().first.flatMap { Int($0) } ?? 8
+        let tracks = try await services.netease.search(keyword, limit: limit)
+        var without = 0
+        for track in tracks {
+            let snapshot = await lookup(services, track: track, channel: .mix)
+            let provider = snapshot.provider.map { "\($0)".uppercased() } ?? "none"
+            let qq = snapshot.qq?.summary ?? "QQ 未查"
+            let failure = snapshot.failure.map { " | 网易失败：\($0)" } ?? ""
+            print("\(track.id)  \(track.title) - \(track.artist)  ->  \(provider) \(snapshot.raw.kind) lines=\(snapshot.raw.lines.count) | \(qq)\(failure)")
+            if !snapshot.raw.hasLines { without += 1 }
+        }
+        print("\(tracks.count - without)/\(tracks.count) have lyrics")
+        return without == 0 ? 0 : 1
     }
 
     // MARK: Smoke test

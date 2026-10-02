@@ -17,13 +17,17 @@ private typealias CoverImage = NSImage
 @MainActor
 public final class NowPlayingBridge {
     private let player: MusicPlayer
+    private let images: ImageStore?
     private var registered: [(command: MPRemoteCommand, token: Any)] = []
     // The cover of the track on show (loaded once per track; a track whose cover failed is not retried).
     private var artwork: (trackId: String, item: MPMediaItemArtwork)?
     private var artworkRequested: String?
 
-    public init(player: MusicPlayer) {
+    /// - Parameter images: where covers come from (kept, so a song heard before needs no download); without
+    ///   one they are fetched plainly each time.
+    public init(player: MusicPlayer, images: ImageStore? = nil) {
         self.player = player
+        self.images = images
     }
 
     public func install() {
@@ -85,17 +89,25 @@ public final class NowPlayingBridge {
               let url = NeteaseApi.imageURL(cover, side: 300) else { return }
         artworkRequested = track.id
         let trackId = track.id
+        let images = self.images
         Task { [weak self] in
-            guard let item = await Self.loadArtwork(url) else { return }
+            guard let item = await Self.loadArtwork(url, images: images) else { return }
             self?.artwork = (trackId, item)
             self?.refresh()
         }
     }
 
-    private nonisolated static func loadArtwork(_ url: URL) async -> MPMediaItemArtwork? {
-        guard let (data, response) = try? await URLSession.shared.data(from: url),
-              (response as? HTTPURLResponse)?.statusCode ?? 200 < 400,
-              let image = CoverImage(data: data) else { return nil }
+    private nonisolated static func loadArtwork(_ url: URL, images: ImageStore?) async -> MPMediaItemArtwork? {
+        let data: Data
+        if let images {
+            guard let kept = await images.data(for: url) else { return nil }
+            data = kept
+        } else {
+            guard let (fetched, response) = try? await URLSession.shared.data(from: url),
+                  (response as? HTTPURLResponse)?.statusCode ?? 200 < 400 else { return nil }
+            data = fetched
+        }
+        guard let image = CoverImage(data: data) else { return nil }
         let box = ImageBox(image)
         return MPMediaItemArtwork(boundsSize: image.size) { _ in box.image }
     }

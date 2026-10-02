@@ -94,6 +94,12 @@ public struct QQMusicApi: Sendable {
         try await fetchLyrics(songId: songId)?.qrc
     }
 
+    /// Opens (and so warms) the connection to QQ Music's host; what comes back does not matter.
+    public func warmUp() async {
+        guard let url = URL(string: "https://c.y.qq.com/") else { return }
+        _ = try? await transport.send(HTTPRequest(url: url, method: "HEAD", headers: ["User-Agent": Self.userAgent], timeout: 8))
+    }
+
     // MARK: Parsing
 
     static func tracks(from root: JSON) -> [QQTrack] {

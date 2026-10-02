@@ -5,6 +5,8 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @State private var steps: [NetworkCheck.Step] = Demo.screen == "settings-net" ? Demo.networkSteps : []
     @State private var checking = false
+    @State private var cacheBytes: Int?
+    @State private var clearing = false
 
     var body: some View {
         @Bindable var settings = app
@@ -80,12 +82,38 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("缓存") {
+                HStack {
+                    Text("已缓存").font(.caption2)
+                    Spacer(minLength: 4)
+                    Text(cacheBytes.map(Self.format) ?? "…").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                Button(role: .destructive) {
+                    Task {
+                        clearing = true
+                        await app.clearCaches()
+                        cacheBytes = await app.cacheSize()
+                        clearing = false
+                    }
+                } label: {
+                    Text(clearing ? "清除中…" : "清除缓存")
+                }
+                .disabled(clearing || app.caches == nil)
+                Text("歌词、封面、榜单的本地缓存，用得越多打开越快；已下载的歌曲不受影响")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
         }
+        .task { cacheBytes = await app.cacheSize() }
         .onAppear {
             if Demo.screen == "settings-net" { proxy.scrollTo("network", anchor: .top) }
         }
         }
         .navigationTitle("设置")
+    }
+
+    private static func format(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
     }
 
     private func runCheck() async {
